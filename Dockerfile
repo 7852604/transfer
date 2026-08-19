@@ -8,7 +8,7 @@ COPY web/ ./
 RUN npm run build
 
 # ---- Go 构建 ----
-FROM golang:1.23-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 ENV GOPROXY=https://goproxy.cn,direct
 COPY go.mod go.sum ./
