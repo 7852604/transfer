@@ -1,0 +1,19 @@
+# 数据目录：数据库 + 上传文件 + 备份都在这里
+data/
+
+# 前端
+web/node_modules/
+
+# 构建产物（保留 .gitkeep 占位，保证 fresh clone 能 go build）
+internal/webui/dist/*
+!internal/webui/dist/.gitkeep
+
+# 环境变量
+.env
+
+# 二进制
+transfer
+transfer-bin
+
+*.tar.gz
+.DS_Store

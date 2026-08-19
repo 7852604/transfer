@@ -1,0 +1,16 @@
+services:
+  transfer:
+    build: .
+    container_name: transfer
+    restart: unless-stopped
+    environment:
+      # 必填：在同级目录 .env 文件里设置（参考 .env.example）
+      - ACCESS_PASSWORD=${ACCESS_PASSWORD:?请先在 .env 里设置 ACCESS_PASSWORD}
+      # 走 nginx HTTPS 反代时开启（cookie 带 Secure 标记）
+      - COOKIE_SECURE=1
+    ports:
+      # 只绑本机回环，不直接暴露公网，由 nginx 反代对外提供服务
+      - "127.0.0.1:8787:8787"
+    volumes:
+      # 数据库、上传文件、备份都在这个目录里，换机器拷走即可迁移
+      - ./data:/app/data
