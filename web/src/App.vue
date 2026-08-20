@@ -7,25 +7,15 @@ import TimelineView from './components/TimelineView.vue'
 const view = ref('loading')
 
 onMounted(async () => {
-  // 跟随可视视口高度（键盘弹出时缩小），保证输入框始终可见
+  // 跟随可视视口高度（键盘弹出时缩小），保证输入框始终可见。
+  // 不用 scrollIntoView——它在 overflow:hidden + flex 布局下会把顶栏推出屏幕。
+  // 只更新 --app-height，让 .timeline 的 flex 布局自己把输入框压到键盘上方。
   const vv = window.visualViewport
   const setAppHeight = () => {
     document.documentElement.style.setProperty('--app-height', `${vv?.height ?? window.innerHeight}px`)
   }
   vv?.addEventListener('resize', setAppHeight)
-  vv?.addEventListener('scroll', setAppHeight)
   setAppHeight()
-
-  // iOS Safari 键盘弹出时 visualViewport 会偏移，需要把聚焦的输入框拉回可视区
-  if (vv) {
-    vv.addEventListener('resize', () => {
-      const el = document.activeElement
-      if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')) {
-        // 等浏览器布局稳定后再滚
-        requestAnimationFrame(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }))
-      }
-    })
-  }
 
   try {
     await api.stats()

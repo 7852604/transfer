@@ -67,10 +67,15 @@ html,
 body {
   height: 100%;
   overflow: hidden;
+  /* fixed 布局锚点：body 不参与文档流滚动，杜绝键盘弹出时浏览器推页面 */
+  position: fixed;
+  inset: 0;
+  width: 100%;
 }
 
 #app {
   height: var(--app-height, 100dvh);
+  overflow: hidden;
 }
 
 .app {
