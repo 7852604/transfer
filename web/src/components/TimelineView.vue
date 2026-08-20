@@ -158,6 +158,13 @@ function appendMessage(msg) {
   }
 }
 
+// 手机端聚焦输入框时，确保不被键盘遮挡
+function onComposerFocus() {
+  requestAnimationFrame(() => {
+    inputEl.value?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  })
+}
+
 async function sendText() {
   const content = draft.value.trim()
   if (!content) return
@@ -432,8 +439,10 @@ function showToast(msg) {
           ref="inputEl"
           v-model="draft"
           rows="1"
-          placeholder="输入文字，Enter 发送（Shift+Enter 换行）"
+          placeholder="输入文字，Enter 发送"
+          enterkeyhint="send"
           @input="autoGrow"
+          @focus="onComposerFocus"
           @keydown.enter.exact.prevent="onEnterKey"
         ></textarea>
         <button class="send-btn" :disabled="!draft.trim()" @click="sendText">发送</button>
