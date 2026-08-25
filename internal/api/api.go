@@ -208,8 +208,17 @@ func (s *Server) handleRoomLogout(w http.ResponseWriter, r *http.Request) {
 
 // 给当前房间设置/修改/清除密码。空字符串 = 取消加密。
 // 已加密房间改密/清密时需先登录（roomAuth 已保证），故不另验旧密码。
+// 但为防止匿名用户改 BUG反馈 房间，要求必须携带有效 room_session cookie。
 func (s *Server) handleSetRoomPassword(w http.ResponseWriter, r *http.Request) {
+	if _, err := r.Cookie(sessionCookie); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "请先进入房间"})
+		return
+	}
 	room := getRoom(r)
+	if room.ID == 0 {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "房间无效"})
+		return
+	}
 	var body struct{ Password string `json:"password"` }
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
