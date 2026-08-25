@@ -246,12 +246,166 @@ textarea {
 
 /* ---------- 主界面骨架 ---------- */
 
-.timeline {
+.shell {
   height: 100%;
-  max-width: 760px;
-  margin: 0 auto;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ---------- 侧边栏 ---------- */
+
+.sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  background: var(--paper);
+  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
+  z-index: 30;
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.sidebar-title {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  letter-spacing: 0.5px;
+  color: var(--ink);
+}
+
+.sidebar-new-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  font-size: 16px;
+  color: var(--ink-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.sidebar-new-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.sidebar-rooms {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-2) var(--sp-1);
+  min-height: 0;
+}
+
+.sidebar-section {
+  font-size: var(--fs-xs);
+  color: var(--ink-4);
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+.sidebar-room {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+  border-radius: var(--r-sm);
+  color: var(--ink-2);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.sidebar-room:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.sidebar-room.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 500;
+}
+
+.room-lock {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.room-lock.muted {
+  opacity: 0.4;
+}
+
+.sidebar-room .room-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-room .room-check {
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  flex-shrink: 0;
+}
+
+.sidebar-tools {
+  padding: var(--sp-2) var(--sp-1);
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.sidebar-tool {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+  border-radius: var(--r-sm);
+  color: var(--ink-2);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.sidebar-tool:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.sidebar-tool.danger {
+  color: var(--danger);
+}
+
+.sidebar-tool.danger:hover {
+  background: rgb(239 68 68 / 8%);
+}
+
+/* 移动端侧边栏：抽屉 */
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 40%);
+  z-index: 29;
+}
+
+/* ---------- 主区域 ---------- */
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   position: relative;
 }
 
@@ -273,49 +427,35 @@ textarea {
   gap: var(--sp-2);
 }
 
-.brand {
+.menu-toggle {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-sm);
+  font-size: 17px;
+  color: var(--ink-3);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.room-title {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
-  cursor: pointer;
-  padding: var(--sp-1) var(--sp-2);
-  margin: calc(-1 * var(--sp-1)) calc(-1 * var(--sp-2));
-  border-radius: var(--r-sm);
-  transition: background var(--dur-fast) var(--ease);
-}
-
-.brand:hover {
-  background: var(--paper-2);
-}
-
-.chevron {
-  font-size: 10px;
-  color: var(--ink-4);
-  margin-left: -2px;
-}
-
-.lock-icon {
-  font-size: 12px;
-}
-
-.brand-logo {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--r-sm);
-  background: var(--accent-soft);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 17px;
-  flex-shrink: 0;
-}
-
-.brand-name {
   font-weight: 600;
   font-size: var(--fs-md);
   letter-spacing: 0.5px;
   color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lock-icon {
+  font-size: 12px;
 }
 
 .stats-chip {
@@ -410,47 +550,6 @@ textarea {
 .search-clear:hover {
   background: var(--line);
   color: var(--ink);
-}
-
-/* ---------- 下拉菜单 ---------- */
-
-.menu-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 19;
-}
-
-.menu {
-  position: absolute;
-  top: 52px;
-  right: var(--sp-3);
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-lg);
-  min-width: 160px;
-  padding: var(--sp-1);
-  overflow: hidden;
-  z-index: 20;
-}
-
-.menu-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: var(--sp-2) var(--sp-3);
-  font-size: var(--fs-sm);
-  border-radius: var(--r-sm);
-  color: var(--ink-2);
-  transition: background var(--dur-fast) var(--ease);
-}
-
-.menu-item:hover {
-  background: var(--paper-2);
-}
-
-.menu-item.danger {
-  color: var(--danger);
 }
 
 /* ---------- 消息列表 ---------- */
@@ -998,7 +1097,30 @@ textarea {
 
 /* ---------- 桌面端：居中聊天窗口 ---------- */
 
-@media (min-width: 640px) {
+/* 移动端默认：侧边栏隐藏成抽屉，显示汉堡按钮 */
+@media (max-width: 767px) {
+  .menu-toggle {
+    display: flex;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 240px;
+    transform: translateX(-100%);
+    transition: transform var(--dur) var(--ease);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+}
+
+/* 桌面端：整体居中成卡片 */
+@media (min-width: 768px) {
   body {
     background: var(--paper-2);
   }
@@ -1007,7 +1129,9 @@ textarea {
     padding: var(--sp-6);
   }
 
-  .timeline {
+  .shell {
+    max-width: 920px;
+    margin: 0 auto;
     background: var(--paper);
     border: 1px solid var(--line);
     border-radius: var(--r-xl);
@@ -1056,40 +1180,6 @@ textarea {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
-}
-
-/* ---------- 房间菜单扩展 ---------- */
-
-.menu-section-title {
-  font-size: var(--fs-xs);
-  color: var(--ink-4);
-  padding: var(--sp-2) var(--sp-3) var(--sp-1);
-  font-weight: 500;
-  letter-spacing: 0.5px;
-}
-
-.menu-divider {
-  height: 1px;
-  background: var(--line);
-  margin: var(--sp-1) 0;
-}
-
-.room-item {
-  display: flex !important;
-  align-items: center;
-  gap: var(--sp-2);
-  justify-content: space-between;
-}
-
-.room-item .check {
-  color: var(--accent);
-  font-size: var(--fs-sm);
-  margin-left: auto;
-}
-
-.room-item.active {
-  color: var(--accent);
-  background: var(--accent-soft);
 }
 
 /* ---------- 回收站 ---------- */

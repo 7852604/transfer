@@ -14,11 +14,14 @@ const stats = ref(null)
 const draft = ref('')
 const uploads = ref([])
 const toast = ref('')
-const showMenu = ref(false)
+const showSidebar = ref(false)
 const showRoomDialog = ref(false)
 const showTrash = ref(false)
 const showCleanup = ref(false)
 const showClear = ref(false)
+const showPasswordDialog = ref(false)
+const passwordInput = ref('')
+const passwordError = ref('')
 const viewerMsg = ref(null)
 const dragging = ref(false)
 
@@ -86,7 +89,7 @@ async function loadRooms() {
 }
 
 async function switchRoom(room) {
-  showMenu.value = false
+  showSidebar.value = false
   if (room.hasPassword && room.id !== currentRoom.value?.id) {
     roomLoginForm.value = { name: room.name, error: '' }
     return
@@ -124,9 +127,25 @@ async function createRoom() {
     newRoomName.value = ''
     newRoomPassword.value = ''
     showRoomDialog.value = false
+    showSidebar.value = false
     messages.value = []
     await loadInitial()
   } catch (e) { showToast(e.message) }
+}
+
+// 给当前房间设置/修改/取消密码
+async function submitSetPassword() {
+  passwordError.value = ''
+  const pw = passwordInput.value.trim()
+  try {
+    const updated = await api.setRoomPassword(pw)
+    // 更新 rooms 列表里对应项
+    rooms.value = rooms.value.map((r) => (r.id === updated.id ? updated : r))
+    currentRoom.value = updated
+    showPasswordDialog.value = false
+    passwordInput.value = ''
+    showToast(updated.hasPassword ? '已设置密码' : '已取消加密')
+  } catch (e) { passwordError.value = e.message || '设置失败' }
 }
 
 // ---------- 消息加载 ----------
@@ -256,7 +275,7 @@ async function deleteMessage(msg) {
 // ---------- 回收站 ----------
 
 async function openTrash() {
-  showMenu.value = false
+  showSidebar.value = false
   showTrash.value = true
   try {
     const data = await api.trash()
@@ -295,7 +314,7 @@ async function emptyTrash() {
 // ---------- 菜单操作 ----------
 
 async function backupNow() {
-  showMenu.value = false
+  showSidebar.value = false
   showToast('备份中…')
   try {
     const r = await api.backupNow()
@@ -336,97 +355,114 @@ function showToast(msg) {
 </script>
 
 <template>
-  <div class="timeline" @dragenter="onDragEnter" @dragover.prevent @dragleave="onDragLeave" @drop.prevent="onDrop">
-    <header class="topbar">
-      <div class="topbar-row">
-        <div class="brand" @click="showMenu = !showMenu">
-          <span class="brand-logo">📨</span>
-          <span class="brand-name">{{ currentRoom?.name || '速传' }}</span>
-          <span v-if="currentRoom?.hasPassword" class="lock-icon">🔒</span>
-          <span class="chevron">▾</span>
-        </div>
-        <span v-if="stats" class="stats-chip">{{ stats.count }} 条 · {{ formatSize(stats.fileBytes || 0) }}</span>
-      </div>
-      <div class="search-box">
-        <svg class="search-icon" viewBox="0 0 20 20"><circle cx="9" cy="9" r="6.2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="13.6" y1="13.6" x2="17.5" y2="17.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-        <input v-model="searchQuery" class="search-input" type="search" placeholder="搜索本房间消息…" />
-        <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">✕</button>
-      </div>
-    </header>
+  <div class="shell" @dragenter="onDragEnter" @dragover.prevent @dragleave="onDragLeave" @drop.prevent="onDrop">
+    <!-- 侧边栏遮罩（移动端） -->
+    <div v-if="showSidebar" class="sidebar-backdrop" @click="showSidebar = false"></div>
 
-    <!-- 房间下拉菜单 -->
-    <div v-if="showMenu" class="menu-backdrop" @click="showMenu = false"></div>
-    <div v-if="showMenu" class="menu" @click.stop>
-      <div class="menu-section-title">切换房间</div>
-      <button v-for="r in rooms" :key="r.id" class="menu-item room-item" :class="{active: r.id === currentRoom?.id}" @click="switchRoom(r)">
-        <span>{{ r.name }}</span>
-        <span v-if="r.hasPassword" class="lock-icon">🔒</span>
-        <span v-if="r.id === currentRoom?.id" class="check">✓</span>
-      </button>
-      <div class="menu-divider"></div>
-      <button class="menu-item" @click="showRoomDialog = true; showMenu = false">＋ 新建房间…</button>
-      <button class="menu-item" @click="openTrash">🗑 回收站</button>
-      <button class="menu-item" @click="backupNow; showMenu = false">💾 立即备份</button>
-      <button class="menu-item" @click="showCleanup = true; showMenu = false">🧹 清理旧消息…</button>
-      <button class="menu-item danger" @click="showClear = true; showMenu = false">⚠ 清空本房间…</button>
-    </div>
+    <!-- 侧边栏 -->
+    <aside class="sidebar" :class="{ open: showSidebar }">
+      <div class="sidebar-head">
+        <span class="sidebar-title">📨 速传</span>
+        <button class="sidebar-new-btn" title="新建房间" @click="showRoomDialog = true; showSidebar = false">＋</button>
+      </div>
 
-    <!-- 主消息列表 -->
-    <main v-if="!showTrash" ref="listEl" class="list" @scroll="onScroll">
-      <button v-if="hasMore && !isSearching" class="load-more" :disabled="loadingOlder" @click="loadMore">
-        {{ loadingOlder ? '加载中…' : '加载更早的消息' }}
-      </button>
-      <template v-for="g in groups" :key="g.day">
-        <div class="day-sep">{{ g.day }}</div>
-        <MessageItem v-for="m in g.items" :key="m.id" :msg="m" @delete="deleteMessage" @preview="viewerMsg = $event" />
-      </template>
-      <div v-for="u in uploads" :key="u.key" class="msg upload-item">
-        <div class="bubble">
-          <div class="upload-name">{{ u.name }} · {{ formatSize(u.size) }}</div>
-          <div v-if="!u.error" class="upload-bar"><div class="upload-fill" :style="{ width: Math.round(u.progress * 100) + '%' }"></div></div>
-          <div v-else class="upload-error">{{ u.error }}<button class="meta-btn" @click="dismissUpload(u.key)">知道了</button></div>
-        </div>
-      </div>
-      <div v-if="isSearching && !searchResults.length" class="empty">没有匹配「{{ searchQuery.trim() }}」的消息</div>
-      <div v-if="!isSearching && !messages.length && !uploads.length" class="empty">
-        <div class="empty-icon">📨</div>
-        <div class="empty-title">{{ currentRoom?.name || '速传' }}</div>
-        <div class="empty-hint">输入文字按 Enter 发送<br />粘贴 / 拖入文件可直接上传</div>
-      </div>
-    </main>
-
-    <!-- 回收站面板 -->
-    <main v-else class="list trash-view">
-      <div class="trash-header">
-        <button class="back-btn" @click="showTrash = false">← 返回</button>
-        <span class="trash-title">回收站</span>
-        <button v-if="trashItems.length" class="meta-btn danger" @click="emptyTrash">清空</button>
-      </div>
-      <div v-if="!trashItems.length" class="empty"><div class="empty-icon">🗑</div><div class="empty-title">回收站是空的</div></div>
-      <div v-for="m in trashItems" :key="m.id" class="trash-item">
-        <div class="trash-content">
-          <span v-if="m.type === 'file'" class="file-tag">{{ m.fileName }}</span>
-          <span v-else>{{ m.content.slice(0, 60) }}{{ m.content.length > 60 ? '…' : '' }}</span>
-        </div>
-        <div class="trash-actions">
-          <button class="meta-btn" @click="restoreMessage(m)">恢复</button>
-          <button class="meta-btn danger" @click="permanentDelete(m)">彻底删除</button>
-        </div>
-      </div>
-      <div class="trash-hint">删除的消息在回收站保留 3 天后自动清除</div>
-    </main>
-
-    <!-- 输入区 -->
-    <footer v-if="!showTrash" class="composer">
-      <div class="composer-box">
-        <button class="attach-btn" title="选择文件" @click="fileInputEl.click()">
-          <svg viewBox="0 0 20 20"><path d="M15.4 8.6l-6.2 6.2a3.2 3.2 0 01-4.5-4.5l7-7a2.2 2.2 0 013.1 3.1l-7 7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <nav class="sidebar-rooms">
+        <div class="sidebar-section">房间</div>
+        <button v-for="r in rooms" :key="r.id" class="sidebar-room" :class="{ active: r.id === currentRoom?.id }" @click="switchRoom(r)">
+          <span v-if="r.hasPassword" class="room-lock">🔒</span>
+          <span v-else class="room-lock muted">🔓</span>
+          <span class="room-name">{{ r.name }}</span>
+          <span v-if="r.id === currentRoom?.id" class="room-check">✓</span>
         </button>
-        <textarea ref="inputEl" v-model="draft" rows="1" placeholder="输入文字，Enter 发送" enterkeyhint="send" @input="autoGrow" @keydown.enter.exact.prevent="onEnterKey"></textarea>
-        <button class="send-btn" :disabled="!draft.trim()" @click="sendText">发送</button>
-        <input ref="fileInputEl" type="file" multiple hidden @change="onFilePick" />
+      </nav>
+
+      <div class="sidebar-tools">
+        <div class="sidebar-section">工具</div>
+        <button class="sidebar-tool" @click="showPasswordDialog = true; showSidebar = false">
+          <span>🔐</span><span>{{ currentRoom?.hasPassword ? '修改 / 取消密码' : '设置密码' }}</span>
+        </button>
+        <button class="sidebar-tool" @click="openTrash"><span>🗑</span><span>回收站</span></button>
+        <button class="sidebar-tool" @click="backupNow"><span>💾</span><span>立即备份</span></button>
+        <button class="sidebar-tool" @click="showCleanup = true; showSidebar = false"><span>🧹</span><span>清理旧消息</span></button>
+        <button class="sidebar-tool danger" @click="showClear = true; showSidebar = false"><span>⚠</span><span>清空本房间</span></button>
       </div>
-    </footer>
+    </aside>
+
+    <!-- 主区域 -->
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-row">
+          <button class="menu-toggle" title="房间列表" @click="showSidebar = true">☰</button>
+          <div class="room-title">
+            <span>{{ currentRoom?.name || '速传' }}</span>
+            <span v-if="currentRoom?.hasPassword" class="lock-icon">🔒</span>
+          </div>
+          <span v-if="stats" class="stats-chip">{{ stats.count }} 条 · {{ formatSize(stats.fileBytes || 0) }}</span>
+        </div>
+        <div class="search-box">
+          <svg class="search-icon" viewBox="0 0 20 20"><circle cx="9" cy="9" r="6.2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="13.6" y1="13.6" x2="17.5" y2="17.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <input v-model="searchQuery" class="search-input" type="search" placeholder="搜索本房间消息…" />
+          <button v-if="searchQuery" class="search-clear" @click="searchQuery = ''">✕</button>
+        </div>
+      </header>
+
+      <!-- 主消息列表 -->
+      <main v-if="!showTrash" ref="listEl" class="list" @scroll="onScroll">
+        <button v-if="hasMore && !isSearching" class="load-more" :disabled="loadingOlder" @click="loadMore">
+          {{ loadingOlder ? '加载中…' : '加载更早的消息' }}
+        </button>
+        <template v-for="g in groups" :key="g.day">
+          <div class="day-sep">{{ g.day }}</div>
+          <MessageItem v-for="m in g.items" :key="m.id" :msg="m" @delete="deleteMessage" @preview="viewerMsg = $event" />
+        </template>
+        <div v-for="u in uploads" :key="u.key" class="msg upload-item">
+          <div class="bubble">
+            <div class="upload-name">{{ u.name }} · {{ formatSize(u.size) }}</div>
+            <div v-if="!u.error" class="upload-bar"><div class="upload-fill" :style="{ width: Math.round(u.progress * 100) + '%' }"></div></div>
+            <div v-else class="upload-error">{{ u.error }}<button class="meta-btn" @click="dismissUpload(u.key)">知道了</button></div>
+          </div>
+        </div>
+        <div v-if="isSearching && !searchResults.length" class="empty">没有匹配「{{ searchQuery.trim() }}」的消息</div>
+        <div v-if="!isSearching && !messages.length && !uploads.length" class="empty">
+          <div class="empty-icon">📨</div>
+          <div class="empty-title">{{ currentRoom?.name || '速传' }}</div>
+          <div class="empty-hint">输入文字按 Enter 发送<br />粘贴 / 拖入文件可直接上传</div>
+        </div>
+      </main>
+
+      <!-- 回收站面板 -->
+      <main v-else class="list trash-view">
+        <div class="trash-header">
+          <button class="back-btn" @click="showTrash = false">← 返回</button>
+          <span class="trash-title">回收站</span>
+          <button v-if="trashItems.length" class="meta-btn danger" @click="emptyTrash">清空</button>
+        </div>
+        <div v-if="!trashItems.length" class="empty"><div class="empty-icon">🗑</div><div class="empty-title">回收站是空的</div></div>
+        <div v-for="m in trashItems" :key="m.id" class="trash-item">
+          <div class="trash-content">
+            <span v-if="m.type === 'file'" class="file-tag">{{ m.fileName }}</span>
+            <span v-else>{{ m.content.slice(0, 60) }}{{ m.content.length > 60 ? '…' : '' }}</span>
+          </div>
+          <div class="trash-actions">
+            <button class="meta-btn" @click="restoreMessage(m)">恢复</button>
+            <button class="meta-btn danger" @click="permanentDelete(m)">彻底删除</button>
+          </div>
+        </div>
+        <div class="trash-hint">删除的消息在回收站保留 3 天后自动清除</div>
+      </main>
+
+      <!-- 输入区 -->
+      <footer v-if="!showTrash" class="composer">
+        <div class="composer-box">
+          <button class="attach-btn" title="选择文件" @click="fileInputEl.click()">
+            <svg viewBox="0 0 20 20"><path d="M15.4 8.6l-6.2 6.2a3.2 3.2 0 01-4.5-4.5l7-7a2.2 2.2 0 013.1 3.1l-7 7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <textarea ref="inputEl" v-model="draft" rows="1" placeholder="输入文字，Enter 发送" enterkeyhint="send" @input="autoGrow" @keydown.enter.exact.prevent="onEnterKey"></textarea>
+          <button class="send-btn" :disabled="!draft.trim()" @click="sendText">发送</button>
+          <input ref="fileInputEl" type="file" multiple hidden @change="onFilePick" />
+        </div>
+      </footer>
+    </div>
 
     <div v-if="dragging" class="drop-overlay">松开鼠标上传文件</div>
     <ImageViewer v-if="viewerMsg" :msg="viewerMsg" @close="viewerMsg = null" />
@@ -453,6 +489,20 @@ function showToast(msg) {
         <div class="modal-actions">
           <button class="btn" @click="roomLoginForm = null">取消</button>
           <button class="btn primary" @click="submitRoomLogin">进入</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 设置/修改房间密码 -->
+    <div v-if="showPasswordDialog" class="modal-backdrop" @click.self="showPasswordDialog = false">
+      <div class="modal">
+        <h3>{{ currentRoom?.hasPassword ? '修改房间密码' : '设置房间密码' }}</h3>
+        <p class="modal-text">房间「{{ currentRoom?.name }}」{{ currentRoom?.hasPassword ? '当前已加密。输入新密码替换旧密码；留空则取消加密。' : '当前未加密。输入密码即开启加密。' }}</p>
+        <input v-model="passwordInput" class="modal-input" type="password" :placeholder="currentRoom?.hasPassword ? '新密码（留空取消加密）' : '新密码'" @keydown.enter="submitSetPassword" />
+        <p v-if="passwordError" class="modal-err">{{ passwordError }}</p>
+        <div class="modal-actions">
+          <button class="btn" @click="showPasswordDialog = false; passwordInput = ''">取消</button>
+          <button class="btn primary" @click="submitSetPassword">{{ currentRoom?.hasPassword ? (passwordInput.trim() ? '修改' : '取消加密') : '设置' }}</button>
         </div>
       </div>
     </div>

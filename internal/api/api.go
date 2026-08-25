@@ -53,6 +53,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/rooms", s.handleCreateRoom)
 	mux.HandleFunc("POST /api/rooms/{room}/login", s.handleRoomLogin)
 	mux.HandleFunc("POST /api/rooms/logout", s.handleRoomLogout)
+	mux.Handle("POST /api/rooms/password", s.roomAuth(s.handleSetRoomPassword))
 
 	// 房间内操作（需要 room session）
 	mux.Handle("GET /api/messages", s.roomAuth(s.handleListMessages))
@@ -203,6 +204,28 @@ func (s *Server) handleRoomLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRoomLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// 给当前房间设置/修改/清除密码。空字符串 = 取消加密。
+// 已加密房间改密/清密时需先登录（roomAuth 已保证），故不另验旧密码。
+func (s *Server) handleSetRoomPassword(w http.ResponseWriter, r *http.Request) {
+	room := getRoom(r)
+	var body struct{ Password string `json:"password"` }
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
+		return
+	}
+	pw := strings.TrimSpace(body.Password)
+	if len(pw) > 100 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "密码太长"})
+		return
+	}
+	if err := s.store.SetRoomPassword(room.ID, pw); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "设置密码失败"})
+		return
+	}
+	updated, _ := s.store.GetRoomByID(room.ID)
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *Server) handleDeleteRoom(w http.ResponseWriter, r *http.Request) {

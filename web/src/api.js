@@ -17,6 +17,7 @@ export const api = {
   createRoom: (name, password) => request('/api/rooms', { method: 'POST', body: JSON.stringify({ name, password }) }),
   loginRoom: (room, password) => request(`/api/rooms/${encodeURIComponent(room)}/login`, { method: 'POST', body: JSON.stringify({ password }) }),
   logoutRoom: () => request('/api/rooms/logout', { method: 'POST' }),
+  setRoomPassword: (password) => request('/api/rooms/password', { method: 'POST', body: JSON.stringify({ password }) }),
 
   // 消息
   messages: (params) => request('/api/messages?' + new URLSearchParams(params)),

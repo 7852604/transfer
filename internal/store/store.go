@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -32,6 +34,15 @@ type Message struct {
 }
 
 var ErrNotFound = errors.New("not found")
+
+// hashPassword 存摘要不存明文。即使数据库泄露也拿不到原始密码。
+func hashPassword(pw string) string {
+	if pw == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(pw))
+	return hex.EncodeToString(h[:])
+}
 
 type Store struct {
 	db *sql.DB
@@ -156,7 +167,7 @@ func (s *Store) GetRoomByID(id int64) (Room, error) {
 }
 
 func (s *Store) CreateRoom(name, password string) (Room, error) {
-	res, err := s.db.Exec(`INSERT INTO rooms (name, password, created_at) VALUES (?, ?, ?)`, name, password, nowMillis())
+	res, err := s.db.Exec(`INSERT INTO rooms (name, password, created_at) VALUES (?, ?, ?)`, name, hashPassword(password), nowMillis())
 	if err != nil {
 		return Room{}, err
 	}
@@ -209,7 +220,17 @@ func (s *Store) CheckRoomPassword(id int64, password string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// 兼容历史明文：若存量是哈希（64 位 hex）则比对哈希，否则按明文比对（仅过渡期）
+	if len(stored) == 64 && stored == hashPassword(password) {
+		return true, nil
+	}
 	return stored == password, nil
+}
+
+// SetRoomPassword 设置/修改/清除房间密码。password 为空则取消加密。
+func (s *Store) SetRoomPassword(id int64, password string) error {
+	_, err := s.db.Exec(`UPDATE rooms SET password = ? WHERE id = ?`, hashPassword(password), id)
+	return err
 }
 
 // ---------- 消息 ----------
