@@ -1,39 +1,25 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { api } from './api'
-import LoginView from './components/LoginView.vue'
 import TimelineView from './components/TimelineView.vue'
 
-const view = ref('loading')
+const ready = ref(false)
 
 onMounted(async () => {
-  // 跟随可视视口高度（键盘弹出时缩小），保证输入框始终可见。
-  // 不用 scrollIntoView——它在 overflow:hidden + flex 布局下会把顶栏推出屏幕。
-  // 只更新 --app-height，让 .timeline 的 flex 布局自己把输入框压到键盘上方。
+  // 跟随可视视口高度（键盘弹出时缩小）
   const vv = window.visualViewport
   const setAppHeight = () => {
     document.documentElement.style.setProperty('--app-height', `${vv?.height ?? window.innerHeight}px`)
   }
   vv?.addEventListener('resize', setAppHeight)
   setAppHeight()
-
-  try {
-    await api.stats()
-    view.value = 'ready'
-  } catch (e) {
-    view.value = e.status === 401 ? 'login' : 'error'
-  }
+  ready.value = true
 })
 </script>
 
 <template>
   <div class="app">
-    <div v-if="view === 'loading'" class="boot">加载中…</div>
-    <LoginView v-else-if="view === 'login'" @done="view = 'ready'" />
-    <TimelineView v-else-if="view === 'ready'" @logout="view = 'login'" />
-    <div v-else class="boot">
-      无法连接服务器
-      <button class="btn-retry" @click="location.reload()">重试</button>
-    </div>
+    <TimelineView v-if="ready" />
+    <div v-else class="boot">加载中…</div>
   </div>
 </template>

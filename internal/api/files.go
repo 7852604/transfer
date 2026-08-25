@@ -19,8 +19,9 @@ import (
 
 const sniffLen = 512
 
-// handleUpload 接收 multipart 文件（字段名 file），存入 uploads 目录并生成消息。
+// handleUpload 接收 multipart 文件（字段名 file），存入当前房间
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	room := getRoom(r)
 	reader, err := r.MultipartReader()
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "不是有效的文件上传请求"})
@@ -40,7 +41,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			part.Close()
 			continue
 		}
-		msg, err := s.saveUpload(part)
+		msg, err := s.saveUploadToRoom(room.ID, part)
 		part.Close()
 		if err != nil {
 			if he, ok := err.(*httpError); ok {
@@ -66,13 +67,13 @@ type httpError struct {
 
 func (e *httpError) Error() string { return e.msg }
 
-func (s *Server) saveUpload(part *multipart.Part) (*store.Message, error) {
+// saveUploadToRoom 把上传的文件存入指定房间
+func (s *Server) saveUploadToRoom(roomID int64, part *multipart.Part) (*store.Message, error) {
 	origName := filepath.Base(part.FileName())
 	if origName == "" || origName == "." || origName == "/" {
 		origName = "unnamed"
 	}
 
-	// 落盘文件名：时间戳 + 随机串 + 白名单后缀（不信任原始文件名的路径部分）
 	ext := strings.ToLower(filepath.Ext(origName))
 	if len(ext) > 10 || strings.ContainsAny(ext, `/\ :`) {
 		ext = ""
@@ -86,7 +87,6 @@ func (s *Server) saveUpload(part *multipart.Part) (*store.Message, error) {
 	}
 	defer dst.Close()
 
-	// 先读 512 字节探测 Content-Type，再限长拷贝
 	head := make([]byte, sniffLen)
 	n, _ := io.ReadFull(part, head)
 
@@ -107,7 +107,7 @@ func (s *Server) saveUpload(part *multipart.Part) (*store.Message, error) {
 	}
 	isImage := strings.HasPrefix(mimeType, "image/")
 
-	msg, err := s.store.InsertFile(fileID, origName, mimeType, written, isImage)
+	msg, err := s.store.InsertFile(roomID, fileID, origName, mimeType, written, isImage)
 	if err != nil {
 		os.Remove(dstPath)
 		return nil, err
@@ -115,8 +115,7 @@ func (s *Server) saveUpload(part *multipart.Part) (*store.Message, error) {
 	return &msg, nil
 }
 
-// handleServeFile 输出文件；图片 inline 预览，其余 attachment 下载。
-// ?download=1 强制下载（用于图片的「下载」按钮）。
+// handleServeFile 输出文件；图片 inline 预览，其余 attachment 下载
 func (s *Server) handleServeFile(w http.ResponseWriter, r *http.Request) {
 	fileID := r.PathValue("fileId")
 	if fileID == "" || strings.ContainsAny(fileID, `/\`) || strings.Contains(fileID, "..") {
@@ -155,7 +154,7 @@ func (s *Server) handleServeFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, st.Name(), st.ModTime(), f)
 }
 
-// removeMessageFile 删除消息对应的落盘文件（文件已不存在时忽略）
+// removeMessageFile 删除消息对应的落盘文件
 func (s *Server) removeMessageFile(m store.Message) {
 	if m.FileID == "" {
 		return

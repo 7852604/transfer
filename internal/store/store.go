@@ -11,8 +11,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type Room struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	HasPassword bool  `json:"hasPassword"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
 type Message struct {
 	ID        int64  `json:"id"`
+	RoomID    int64  `json:"roomId"`
 	Type      string `json:"type"` // "text" | "file"
 	Content   string `json:"content"`
 	FileID    string `json:"fileId,omitempty"`
@@ -20,7 +28,7 @@ type Message struct {
 	FileSize  int64  `json:"fileSize,omitempty"`
 	FileMime  string `json:"fileMime,omitempty"`
 	IsImage   bool   `json:"isImage,omitempty"`
-	CreatedAt int64  `json:"createdAt"` // unix 毫秒
+	CreatedAt int64  `json:"createdAt"`
 }
 
 var ErrNotFound = errors.New("not found")
@@ -35,7 +43,6 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 单用户量级很小，串行化连接可彻底避免 "database is locked"
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
@@ -48,9 +55,17 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) migrate() error {
+	// 迁移：如果旧表没有 room_id/deleted_at 列，用 ALTER TABLE 补上
 	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS rooms (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	name       TEXT    NOT NULL UNIQUE,
+	password   TEXT    NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS messages (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	room_id    INTEGER NOT NULL DEFAULT 1,
 	type       TEXT    NOT NULL CHECK (type IN ('text','file')),
 	content    TEXT    NOT NULL DEFAULT '',
 	file_id    TEXT,
@@ -58,17 +73,31 @@ CREATE TABLE IF NOT EXISTS messages (
 	file_size  INTEGER NOT NULL DEFAULT 0,
 	file_mime  TEXT,
 	is_image   INTEGER NOT NULL DEFAULT 0,
-	created_at INTEGER NOT NULL
+	created_at INTEGER NOT NULL,
+	deleted_at INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id, deleted_at, id);
 CREATE TABLE IF NOT EXISTS tokens (
 	token      TEXT PRIMARY KEY,
+	room_id    INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL
 );`)
-	return err
+	if err != nil {
+		return err
+	}
+	// 补列（旧库迁移，SQLite 的 ALTER TABLE ADD COLUMN 幂等性靠忽略错误实现）
+	for _, col := range []string{"room_id", "deleted_at"} {
+		s.db.Exec(fmt.Sprintf(`ALTER TABLE messages ADD COLUMN %s INTEGER NOT NULL DEFAULT 0`, col))
+	}
+	for _, col := range []string{"room_id"} {
+		s.db.Exec(fmt.Sprintf(`ALTER TABLE tokens ADD COLUMN %s INTEGER NOT NULL DEFAULT 0`, col))
+	}
+	// 确保默认房间存在
+	s.db.Exec(`INSERT OR IGNORE INTO rooms (id, name, password, created_at) VALUES (1, 'BUG反馈', '', ?)`, nowMillis())
+	return nil
 }
 
-const cols = `id, type, content, file_id, file_name, file_size, file_mime, is_image, created_at`
+const msgCols = `id, room_id, type, content, file_id, file_name, file_size, file_mime, is_image, created_at, deleted_at`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -76,7 +105,8 @@ func scanMessage(row scanner) (Message, error) {
 	var m Message
 	var isImage int
 	var fileID, fileName, fileMime sql.Null[string]
-	err := row.Scan(&m.ID, &m.Type, &m.Content, &fileID, &fileName, &m.FileSize, &fileMime, &isImage, &m.CreatedAt)
+	var deletedAt int64
+	err := row.Scan(&m.ID, &m.RoomID, &m.Type, &m.Content, &fileID, &fileName, &m.FileSize, &fileMime, &isImage, &m.CreatedAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, ErrNotFound
 	}
@@ -88,8 +118,104 @@ func scanMessage(row scanner) (Message, error) {
 	return m, nil
 }
 
-func (s *Store) InsertText(content string) (Message, error) {
-	res, err := s.db.Exec(`INSERT INTO messages (type, content, created_at) VALUES ('text', ?, ?)`, content, nowMillis())
+// ---------- 房间 ----------
+
+func (s *Store) ListRooms() ([]Room, error) {
+	rows, err := s.db.Query(`SELECT id, name, CASE WHEN password = '' THEN 0 ELSE 1 END, created_at FROM rooms ORDER BY id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	rooms := []Room{}
+	for rows.Next() {
+		var r Room
+		if err := rows.Scan(&r.ID, &r.Name, &r.HasPassword, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		rooms = append(rooms, r)
+	}
+	return rooms, rows.Err()
+}
+
+func (s *Store) GetRoom(name string) (Room, error) {
+	var r Room
+	err := s.db.QueryRow(`SELECT id, name, CASE WHEN password = '' THEN 0 ELSE 1 END, created_at FROM rooms WHERE name = ?`, name).Scan(&r.ID, &r.Name, &r.HasPassword, &r.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return r, ErrNotFound
+	}
+	return r, err
+}
+
+func (s *Store) GetRoomByID(id int64) (Room, error) {
+	var r Room
+	err := s.db.QueryRow(`SELECT id, name, CASE WHEN password = '' THEN 0 ELSE 1 END, created_at FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &r.HasPassword, &r.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return r, ErrNotFound
+	}
+	return r, err
+}
+
+func (s *Store) CreateRoom(name, password string) (Room, error) {
+	res, err := s.db.Exec(`INSERT INTO rooms (name, password, created_at) VALUES (?, ?, ?)`, name, password, nowMillis())
+	if err != nil {
+		return Room{}, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetRoomByID(id)
+}
+
+func (s *Store) DeleteRoom(id int64) ([]Message, error) {
+	// 不允许删除默认房间
+	if id == 1 {
+		return nil, errors.New("不能删除默认房间")
+	}
+	// 查出该房间的所有消息（含已删除的），供清理文件
+	rows, err := s.db.Query(`SELECT `+msgCols+` FROM messages WHERE room_id = ?`, id)
+	if err != nil {
+		return nil, err
+	}
+	msgs := []Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// 删消息和房间
+	if _, err := s.db.Exec(`DELETE FROM messages WHERE room_id = ?`, id); err != nil {
+		return nil, err
+	}
+	if _, err := s.db.Exec(`DELETE FROM tokens WHERE room_id = ?`, id); err != nil {
+		return nil, err
+	}
+	if _, err := s.db.Exec(`DELETE FROM rooms WHERE id = ?`, id); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+func (s *Store) CheckRoomPassword(id int64, password string) (bool, error) {
+	var stored string
+	err := s.db.QueryRow(`SELECT password FROM rooms WHERE id = ?`, id).Scan(&stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	return stored == password, nil
+}
+
+// ---------- 消息 ----------
+
+func (s *Store) InsertText(roomID int64, content string) (Message, error) {
+	res, err := s.db.Exec(`INSERT INTO messages (room_id, type, content, created_at) VALUES (?, 'text', ?, ?)`, roomID, content, nowMillis())
 	if err != nil {
 		return Message{}, err
 	}
@@ -97,13 +223,13 @@ func (s *Store) InsertText(content string) (Message, error) {
 	return s.Get(id)
 }
 
-func (s *Store) InsertFile(fileID, fileName, fileMime string, size int64, isImage bool) (Message, error) {
+func (s *Store) InsertFile(roomID int64, fileID, fileName, fileMime string, size int64, isImage bool) (Message, error) {
 	img := 0
 	if isImage {
 		img = 1
 	}
-	res, err := s.db.Exec(`INSERT INTO messages (type, content, file_id, file_name, file_size, file_mime, is_image, created_at)
-		VALUES ('file', ?, ?, ?, ?, ?, ?, ?)`, fileName, fileID, fileName, size, fileMime, img, nowMillis())
+	res, err := s.db.Exec(`INSERT INTO messages (room_id, type, content, file_id, file_name, file_size, file_mime, is_image, created_at)
+		VALUES (?, 'file', ?, ?, ?, ?, ?, ?, ?)`, roomID, fileName, fileID, fileName, size, fileMime, img, nowMillis())
 	if err != nil {
 		return Message{}, err
 	}
@@ -112,38 +238,32 @@ func (s *Store) InsertFile(fileID, fileName, fileMime string, size int64, isImag
 }
 
 func (s *Store) Get(id int64) (Message, error) {
-	row := s.db.QueryRow(`SELECT `+cols+` FROM messages WHERE id = ?`, id)
+	row := s.db.QueryRow(`SELECT `+msgCols+` FROM messages WHERE id = ? AND deleted_at = 0`, id)
 	return scanMessage(row)
 }
 
 func (s *Store) GetByFileID(fileID string) (Message, error) {
-	row := s.db.QueryRow(`SELECT `+cols+` FROM messages WHERE file_id = ? LIMIT 1`, fileID)
+	row := s.db.QueryRow(`SELECT `+msgCols+` FROM messages WHERE file_id = ? LIMIT 1`, fileID)
 	return scanMessage(row)
 }
 
-// List 拉取消息：
-//   - after > 0:  返回 id 大于 after 的消息（轮询增量），升序
-//   - before > 0: 返回 id 小于 before 的最新一页（向上翻页），升序
-//   - 其余:       返回最新一页，升序
-//
-// hasMore 表示是否还有更早的历史。
-func (s *Store) List(after, before int64, limit int) ([]Message, bool, error) {
+// List 拉取某房间的未删除消息
+func (s *Store) List(roomID, after, before int64, limit int) ([]Message, bool, error) {
 	var rows *sql.Rows
 	var err error
 	switch {
 	case after > 0:
-		rows, err = s.db.Query(`SELECT `+cols+` FROM messages WHERE id > ? ORDER BY id ASC LIMIT ?`, after, limit)
+		rows, err = s.db.Query(`SELECT `+msgCols+` FROM messages WHERE room_id = ? AND deleted_at = 0 AND id > ? ORDER BY id ASC LIMIT ?`, roomID, after, limit)
 	case before > 0:
-		rows, err = s.db.Query(`SELECT `+cols+` FROM messages WHERE id < ? ORDER BY id DESC LIMIT ?`, before, limit+1)
+		rows, err = s.db.Query(`SELECT `+msgCols+` FROM messages WHERE room_id = ? AND deleted_at = 0 AND id < ? ORDER BY id DESC LIMIT ?`, roomID, before, limit+1)
 	default:
-		rows, err = s.db.Query(`SELECT `+cols+` FROM messages ORDER BY id DESC LIMIT ?`, limit+1)
+		rows, err = s.db.Query(`SELECT `+msgCols+` FROM messages WHERE room_id = ? AND deleted_at = 0 ORDER BY id DESC LIMIT ?`, roomID, limit+1)
 	}
 	if err != nil {
 		return nil, false, err
 	}
 	defer rows.Close()
 
-	// 初始化为空切片，保证 JSON 序列化为 [] 而不是 null
 	msgs := []Message{}
 	for rows.Next() {
 		m, err := scanMessage(rows)
@@ -162,7 +282,6 @@ func (s *Store) List(after, before int64, limit int) ([]Message, bool, error) {
 			hasMore = true
 			msgs = msgs[:limit]
 		}
-		// 查询是最新在前，反转为时间正序
 		for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
 			msgs[i], msgs[j] = msgs[j], msgs[i]
 		}
@@ -170,8 +289,43 @@ func (s *Store) List(after, before int64, limit int) ([]Message, bool, error) {
 	return msgs, hasMore, nil
 }
 
-func (s *Store) Delete(id int64) (Message, error) {
+// SoftDelete 软删除：标记 deleted_at，消息进入回收站
+func (s *Store) SoftDelete(id int64) (Message, error) {
 	m, err := s.Get(id)
+	if err != nil {
+		return m, err
+	}
+	_, err = s.db.Exec(`UPDATE messages SET deleted_at = ? WHERE id = ?`, nowMillis(), id)
+	return m, err
+}
+
+// Restore 从回收站恢复消息
+func (s *Store) Restore(id int64) (Message, error) {
+	row := s.db.QueryRow(`SELECT `+msgCols+` FROM messages WHERE id = ?`, id)
+	m, err := scanMessage(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	if err != nil {
+		return m, err
+	}
+	_, err = s.db.Exec(`UPDATE messages SET deleted_at = 0 WHERE id = ?`, id)
+	if err != nil {
+		return m, err
+	}
+	// 重新查一次拿到 deleted_at=0 的状态
+	row2 := s.db.QueryRow(`SELECT `+msgCols+` FROM messages WHERE id = ?`, id)
+	return scanMessage(row2)
+}
+
+func (s *Store) GetByFileIDRaw(id int64) (Message, error) {
+	row := s.db.QueryRow(`SELECT `+msgCols+` FROM messages WHERE id = ?`, id)
+	return scanMessage(row)
+}
+
+// PermanentDelete 永久删除单条消息（从回收站清除）
+func (s *Store) PermanentDelete(id int64) (Message, error) {
+	m, err := s.GetByFileIDRaw(id)
 	if err != nil {
 		return m, err
 	}
@@ -179,71 +333,9 @@ func (s *Store) Delete(id int64) (Message, error) {
 	return m, err
 }
 
-// DeleteBefore 删除 created_at 早于 ts（unix 毫秒）的消息，返回被删除的列表供调用方清理文件。
-func (s *Store) DeleteBefore(ts int64) ([]Message, error) {
-	rows, err := s.db.Query(`SELECT `+cols+` FROM messages WHERE created_at < ?`, ts)
-	if err != nil {
-		return nil, err
-	}
-	var msgs []Message
-	for rows.Next() {
-		m, err := scanMessage(rows)
-		if err != nil {
-			rows.Close()
-			return nil, err
-		}
-		msgs = append(msgs, m)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if _, err := s.db.Exec(`DELETE FROM messages WHERE created_at < ?`, ts); err != nil {
-		return nil, err
-	}
-	return msgs, nil
-}
-
-func (s *Store) DeleteAll() ([]Message, error) {
-	rows, err := s.db.Query(`SELECT ` + cols + ` FROM messages`)
-	if err != nil {
-		return nil, err
-	}
-	var msgs []Message
-	for rows.Next() {
-		m, err := scanMessage(rows)
-		if err != nil {
-			rows.Close()
-			return nil, err
-		}
-		msgs = append(msgs, m)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if _, err := s.db.Exec(`DELETE FROM messages`); err != nil {
-		return nil, err
-	}
-	return msgs, nil
-}
-
-// Search 模糊搜索：按空白拆成多个关键词，全部命中才返回（顺序无关）。
-// "admin 密码" 能命中 "密码是 admin123" 这类内容。
-func (s *Store) Search(q string, limit int) ([]Message, error) {
-	keywords := strings.Fields(q)
-	if len(keywords) == 0 {
-		return []Message{}, nil
-	}
-	conds := make([]string, 0, len(keywords))
-	args := make([]any, 0, len(keywords)+1)
-	for _, kw := range keywords {
-		esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(kw)
-		conds = append(conds, `content LIKE '%' || ? || '%' ESCAPE '\'`)
-		args = append(args, esc)
-	}
-	args = append(args, limit)
-	rows, err := s.db.Query(`SELECT `+cols+` FROM messages WHERE `+strings.Join(conds, " AND ")+` ORDER BY id DESC LIMIT ?`, args...)
+// ListTrash 列出某房间的回收站消息
+func (s *Store) ListTrash(roomID int64) ([]Message, error) {
+	rows, err := s.db.Query(`SELECT `+msgCols+` FROM messages WHERE room_id = ? AND deleted_at > 0 ORDER BY deleted_at DESC`, roomID)
 	if err != nil {
 		return nil, err
 	}
@@ -259,13 +351,153 @@ func (s *Store) Search(q string, limit int) ([]Message, error) {
 	return msgs, rows.Err()
 }
 
-func (s *Store) Stats() (count int64, fileBytes int64, err error) {
-	err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(file_size),0) FROM messages`).Scan(&count, &fileBytes)
+// PurgeExpired 永久删除超过 retainDays 天的回收站消息，返回被删除的列表供清理文件
+func (s *Store) PurgeExpired(retainDays int) ([]Message, error) {
+	cutoff := time.Now().AddDate(0, 0, -retainDays).UnixMilli()
+	rows, err := s.db.Query(`SELECT `+msgCols+` FROM messages WHERE deleted_at > 0 AND deleted_at < ?`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	msgs := []Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(msgs) > 0 {
+		if _, err := s.db.Exec(`DELETE FROM messages WHERE deleted_at > 0 AND deleted_at < ?`, cutoff); err != nil {
+			return nil, err
+		}
+	}
+	return msgs, nil
+}
+
+// DeleteBefore 清理某房间 N 天前的消息（含文件），返回被删除列表
+func (s *Store) DeleteBefore(roomID, ts int64) ([]Message, error) {
+	rows, err := s.db.Query(`SELECT `+msgCols+` FROM messages WHERE room_id = ? AND deleted_at = 0 AND created_at < ?`, roomID, ts)
+	if err != nil {
+		return nil, err
+	}
+	msgs := []Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := s.db.Exec(`DELETE FROM messages WHERE room_id = ? AND deleted_at = 0 AND created_at < ?`, roomID, ts); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// DeleteAll 清空某房间所有消息
+func (s *Store) DeleteAll(roomID int64) ([]Message, error) {
+	rows, err := s.db.Query(`SELECT ` + msgCols + ` FROM messages WHERE room_id = ? AND deleted_at = 0`, roomID)
+	if err != nil {
+		return nil, err
+	}
+	msgs := []Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := s.db.Exec(`DELETE FROM messages WHERE room_id = ? AND deleted_at = 0`, roomID); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// EmptyTrash 清空某房间回收站
+func (s *Store) EmptyTrash(roomID int64) ([]Message, error) {
+	rows, err := s.db.Query(`SELECT `+msgCols+` FROM messages WHERE room_id = ? AND deleted_at > 0`, roomID)
+	if err != nil {
+		return nil, err
+	}
+	msgs := []Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := s.db.Exec(`DELETE FROM messages WHERE room_id = ? AND deleted_at > 0`, roomID); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+func (s *Store) Search(roomID int64, q string, limit int) ([]Message, error) {
+	keywords := strings.Fields(q)
+	if len(keywords) == 0 {
+		return []Message{}, nil
+	}
+	conds := make([]string, 0, len(keywords))
+	args := make([]any, 0, len(keywords)+2)
+	args = append(args, roomID)
+	for _, kw := range keywords {
+		esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(kw)
+		conds = append(conds, `content LIKE '%' || ? || '%' ESCAPE '\'`)
+		args = append(args, esc)
+	}
+	args = append(args, limit)
+	rows, err := s.db.Query(`SELECT `+msgCols+` FROM messages WHERE room_id = ? AND deleted_at = 0 AND (`+strings.Join(conds, " AND ")+`) ORDER BY id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	msgs := []Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}
+
+func (s *Store) Stats(roomID int64) (count int64, fileBytes int64, trashCount int64, err error) {
+	err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(file_size),0), (SELECT COUNT(*) FROM messages WHERE room_id = ? AND deleted_at > 0) FROM messages WHERE room_id = ? AND deleted_at = 0`, roomID, roomID).Scan(&count, &fileBytes, &trashCount)
 	return
 }
 
-func (s *Store) CreateToken(token string) error {
-	_, err := s.db.Exec(`INSERT INTO tokens (token, created_at) VALUES (?, ?)`, token, nowMillis())
+func (s *Store) StatsAll() (count int64, fileBytes int64, err error) {
+	err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(file_size),0) FROM messages WHERE deleted_at = 0`).Scan(&count, &fileBytes)
+	return
+}
+
+// ---------- Token ----------
+
+func (s *Store) CreateToken(token string, roomID int64) error {
+	_, err := s.db.Exec(`INSERT INTO tokens (token, room_id, created_at) VALUES (?, ?, ?)`, token, roomID, nowMillis())
 	return err
 }
 

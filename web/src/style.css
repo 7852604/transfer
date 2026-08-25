@@ -278,6 +278,25 @@ textarea {
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
+  cursor: pointer;
+  padding: var(--sp-1) var(--sp-2);
+  margin: calc(-1 * var(--sp-1)) calc(-1 * var(--sp-2));
+  border-radius: var(--r-sm);
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.brand:hover {
+  background: var(--paper-2);
+}
+
+.chevron {
+  font-size: 10px;
+  color: var(--ink-4);
+  margin-left: -2px;
+}
+
+.lock-icon {
+  font-size: 12px;
 }
 
 .brand-logo {
@@ -1037,4 +1056,139 @@ textarea {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ---------- 房间菜单扩展 ---------- */
+
+.menu-section-title {
+  font-size: var(--fs-xs);
+  color: var(--ink-4);
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+.menu-divider {
+  height: 1px;
+  background: var(--line);
+  margin: var(--sp-1) 0;
+}
+
+.room-item {
+  display: flex !important;
+  align-items: center;
+  gap: var(--sp-2);
+  justify-content: space-between;
+}
+
+.room-item .check {
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  margin-left: auto;
+}
+
+.room-item.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---------- 回收站 ---------- */
+
+.trash-view {
+  padding-top: 0;
+}
+
+.trash-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--sp-3);
+}
+
+.back-btn {
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.trash-title {
+  font-weight: 600;
+  font-size: var(--fs-md);
+  flex: 1;
+}
+
+.trash-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  margin-bottom: var(--sp-2);
+  background: var(--card);
+}
+
+.trash-content {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-tag {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.trash-actions {
+  display: flex;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
+.trash-hint {
+  text-align: center;
+  color: var(--ink-4);
+  font-size: var(--fs-xs);
+  margin-top: var(--sp-4);
+}
+
+/* ---------- 模态框 input ---------- */
+
+.modal-input {
+  width: 100%;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  font-size: var(--fs-md);
+  outline: none;
+  background: var(--paper-2);
+  margin-bottom: var(--sp-3);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.modal-input:focus {
+  border-color: var(--accent);
+  background: var(--card);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.modal-err {
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  margin: calc(-1 * var(--sp-2)) 0 var(--sp-3);
+}
+
+.modal-actions .btn.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.modal-actions .btn.primary:hover {
+  background: var(--accent-hover);
 }
