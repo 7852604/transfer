@@ -654,6 +654,8 @@ textarea {
 
 .msg {
   margin-bottom: var(--sp-3);
+  border-radius: var(--r-lg);
+  scroll-margin: 60px;
 }
 
 .bubble {
@@ -1225,17 +1227,19 @@ textarea {
 
 /* ---------- 置顶条 ---------- */
 
+/* 固定在消息列表上方（不随列表滚动），点击跳转原消息 */
 .pinned-bar {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
-  margin-bottom: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   background: var(--accent-soft);
-  border: 1px solid var(--accent-line);
-  border-radius: var(--r-md);
+  border-bottom: 1px solid var(--accent-line);
   font-size: var(--fs-sm);
   color: var(--ink-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  z-index: 10;
 }
 
 .pinned-icon {
@@ -1250,6 +1254,15 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ink);
+}
+
+.pinned-jump {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-full);
+  padding: 1px 8px;
 }
 
 .pinned-unpin {
@@ -1268,6 +1281,16 @@ textarea {
 .pinned-unpin:hover {
   background: var(--line);
   color: var(--ink);
+}
+
+/* 跳转定位时的高亮闪烁 */
+.msg-flash {
+  animation: msg-flash 1.5s var(--ease);
+}
+
+@keyframes msg-flash {
+  0%, 60% { background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent-line); }
+  100% { background: transparent; box-shadow: none; }
 }
 
 /* ---------- 弹窗辅助 ---------- */

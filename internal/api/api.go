@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"io/fs"
 	"log"
@@ -45,6 +47,7 @@ func New(cfg Config, st *store.Store, bk *backup.Manager) *Server {
 }
 
 const sessionCookie = "room_session"
+const adminCookie = "admin_session"
 
 // clientIP 提取客户端 IP（nginx 反代场景优先 X-Forwarded-For 首段）
 func clientIP(r *http.Request) string {
@@ -258,10 +261,10 @@ func (s *Server) handleSetRoomPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
-// delRoomAttempts 每分钟每 IP 最多 10 次删除房间尝试
+// delRoomAttempts 每分钟每 IP 最多 10 次管理密码尝试
 var delRoomAttempts = map[string][]time.Time{}
 
-func delRoomRateLimited(ip string) bool {
+func adminRateLimited(ip string) bool {
 	now := time.Now()
 	window := now.Add(-time.Minute)
 	keep := delRoomAttempts[ip][:0]
@@ -278,27 +281,62 @@ func delRoomRateLimited(ip string) bool {
 	return false
 }
 
-// 删除当前房间（连同全部消息，不进回收站）。需要全局管理密码。
-// ADMIN_PASSWORD 未配置时功能整体禁用。
+// adminEnabled 管理操作是否可用（配置了 ADMIN_PASSWORD 才启用）
+func (s *Server) adminEnabled() bool { return s.cfg.AdminPassword != "" }
+
+// adminVerified 请求是否已通过管理验证：admin_session cookie 有效即通过。
+// cookie 由 verifyAdmin 成功后下发，10 年有效——同一浏览器验证一次全通用。
+func (s *Server) adminVerified(r *http.Request) bool {
+	c, err := r.Cookie(adminCookie)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.adminCookieValue())) == 1
+}
+
+// adminCookieValue 管理会话凭证：由 ADMIN_PASSWORD 派生，改密码即全体失效
+func (s *Server) adminCookieValue() string {
+	sum := sha256.Sum256([]byte("admin-session:" + s.cfg.AdminPassword))
+	return hex.EncodeToString(sum[:])
+}
+
+// verifyAdmin 校验管理密码。通过则下发 admin_session cookie 并返回 true。
+// 未配置 ADMIN_PASSWORD 或被限速时直接写响应并返回 false。
+func (s *Server) verifyAdmin(w http.ResponseWriter, r *http.Request, bodyPassword string) bool {
+	if !s.adminEnabled() {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "未配置 ADMIN_PASSWORD，管理操作已禁用"})
+		return false
+	}
+	if s.adminVerified(r) {
+		return true
+	}
+	if adminRateLimited(clientIP(r)) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "尝试太频繁，请稍后再试"})
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(bodyPassword), []byte(s.cfg.AdminPassword)) != 1 {
+		time.Sleep(200 * time.Millisecond)
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "管理密码不对"})
+		return false
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: adminCookie, Value: s.adminCookieValue(),
+		Path: "/", MaxAge: 86400 * 3650, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Secure: s.cfg.CookieSecure,
+	})
+	return true
+}
+
+// 删除当前房间（连同全部消息，不进回收站）。需要管理密码（验证一次后本浏览器免验）。
 func (s *Server) handleDeleteRoom(w http.ResponseWriter, r *http.Request) {
 	room := getRoom(r)
-	if s.cfg.AdminPassword == "" {
-		writeJSON(w, http.StatusForbidden, map[string]any{"error": "未配置 ADMIN_PASSWORD，删除房间功能已禁用"})
-		return
-	}
 	if room.ID == 1 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "默认房间不能删除"})
 		return
 	}
-	if delRoomRateLimited(clientIP(r)) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "尝试太频繁，请稍后再试"})
-		return
-	}
 	var body struct{ AdminPassword string `json:"adminPassword"` }
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
-	if subtle.ConstantTimeCompare([]byte(body.AdminPassword), []byte(s.cfg.AdminPassword)) != 1 {
-		time.Sleep(200 * time.Millisecond)
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "管理密码不对"})
+	if !s.verifyAdmin(w, r, body.AdminPassword) {
 		return
 	}
 	msgs, err := s.store.DeleteRoom(room.ID)
@@ -439,10 +477,16 @@ func (s *Server) handleRestoreMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msg)
 }
 
+// 彻底删除回收站单条消息。需要管理密码（验证一次后本浏览器免验）。
 func (s *Server) handlePermanentDelete(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "非法 id"})
+		return
+	}
+	var body struct{ AdminPassword string `json:"adminPassword"` }
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
+	if !s.verifyAdmin(w, r, body.AdminPassword) {
 		return
 	}
 	msg, err := s.store.PermanentDelete(id)
@@ -458,7 +502,16 @@ func (s *Server) handlePermanentDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// 清空回收站。需要管理密码（验证一次后本浏览器免验）。
 func (s *Server) handleEmptyTrash(w http.ResponseWriter, r *http.Request) {
+	if !s.adminEnabled() {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "未配置 ADMIN_PASSWORD，管理操作已禁用"})
+		return
+	}
+	if !s.adminVerified(r) {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "需要管理密码"})
+		return
+	}
 	room := getRoom(r)
 	msgs, err := s.store.EmptyTrash(room.ID)
 	if err != nil {

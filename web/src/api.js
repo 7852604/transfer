@@ -29,8 +29,8 @@ export const api = {
   // 回收站
   trash: () => request('/api/trash'),
   restore: (id) => request(`/api/trash/${id}/restore`, { method: 'POST' }),
-  permanentDelete: (id) => request(`/api/trash/${id}`, { method: 'DELETE' }),
-  emptyTrash: () => request('/api/trash/empty', { method: 'POST' }),
+  permanentDelete: (id, adminPassword) => request(`/api/trash/${id}`, { method: 'DELETE', body: JSON.stringify({ adminPassword }) }),
+  emptyTrash: (adminPassword) => request('/api/trash/empty', { method: 'POST', body: JSON.stringify({ adminPassword }) }),
 
   // 其他
   cleanup: (days) => request('/api/cleanup', { method: 'POST', body: JSON.stringify({ days }) }),

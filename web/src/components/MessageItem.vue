@@ -69,7 +69,7 @@ function onDelete() {
 </script>
 
 <template>
-  <div class="msg">
+  <div class="msg" :data-msg-id="msg.id">
     <!-- 文字消息 -->
     <div v-if="msg.type === 'text'" class="bubble">
       <div ref="textEl" class="msg-text" :class="{ expanded }" v-html="html"></div>

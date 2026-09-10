@@ -26,6 +26,9 @@ const showDeleteRoom = ref(false)
 const adminPassword = ref('')
 const deleteRoomError = ref('')
 const deleting = ref(false)
+// 管理密码确认弹窗：{ action: 'permanentDelete'|'emptyTrash', msg? }
+const adminConfirm = ref(null)
+const adminConfirmError = ref('')
 const viewerMsg = ref(null)
 const dragging = ref(false)
 
@@ -371,20 +374,75 @@ async function restoreMessage(msg) {
 }
 
 async function permanentDelete(msg) {
-  try {
-    await api.permanentDelete(msg.id)
-    trashItems.value = trashItems.value.filter((m) => m.id !== msg.id)
-    refreshStats()
-  } catch (e) { showToast('删除失败') }
+  // 需要管理密码确认；已验证过的浏览器后端直接放行
+  adminConfirm.value = { action: 'permanentDelete', msg }
+  adminConfirmError.value = ''
 }
 
 async function emptyTrash() {
+  adminConfirm.value = { action: 'emptyTrash' }
+  adminConfirmError.value = ''
+}
+
+// 管理密码确认弹窗提交
+async function submitAdminConfirm() {
+  if (!adminConfirm.value) return
+  const { action, msg } = adminConfirm.value
+  const pw = adminPassword.value
   try {
-    const r = await api.emptyTrash()
-    trashItems.value = []
-    showToast(`已清空回收站，释放 ${formatSize(r.freedBytes)}`)
-    refreshStats()
-  } catch (e) { showToast('清空失败') }
+    if (action === 'permanentDelete') {
+      await api.permanentDelete(msg.id, pw)
+      trashItems.value = trashItems.value.filter((m) => m.id !== msg.id)
+      refreshStats()
+    } else if (action === 'emptyTrash') {
+      const r = await api.emptyTrash(pw)
+      trashItems.value = []
+      showToast(`已清空回收站，释放 ${formatSize(r.freedBytes)}`)
+      refreshStats()
+    }
+    adminConfirm.value = null
+    adminPassword.value = ''
+  } catch (e) {
+    adminConfirmError.value = e.message || '操作失败'
+  }
+}
+
+// 点击置顶条：跳转到原消息位置
+function jumpToPinned() {
+  const pid = currentRoom.value?.pinnedMsgId
+  if (!pid) return
+  // 消息在当前列表里：直接滚动定位
+  const el = listEl.value?.querySelector(`[data-msg-id="${pid}"]`)
+  if (el) {
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    el.classList.add('msg-flash')
+    setTimeout(() => el.classList.remove('msg-flash'), 1600)
+    return
+  }
+  // 不在列表里（更早的消息）：先加载更早的再定位
+  if (hasMore.value) {
+    loadAllTo(pid)
+  } else {
+    showToast('原消息不在当前列表')
+  }
+}
+
+// 逐页加载更早的消息直到找到目标 id
+async function loadAllTo(targetId) {
+  showToast('正在查找原消息…')
+  let guard = 0
+  while (hasMore.value && guard++ < 50) {
+    await loadMore()
+    await nextTick()
+    const el = listEl.value?.querySelector(`[data-msg-id="${targetId}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.classList.add('msg-flash')
+      setTimeout(() => el.classList.remove('msg-flash'), 1600)
+      return
+    }
+  }
+  showToast('原消息不在当前列表')
 }
 
 // ---------- 菜单操作 ----------
@@ -485,14 +543,16 @@ function showToast(msg) {
         </div>
       </header>
 
+      <!-- 置顶条：固定在列表上方，滚动到哪都能看到 -->
+      <div v-if="!showTrash && pinnedMsg" class="pinned-bar" @click="jumpToPinned">
+        <span class="pinned-icon">📌</span>
+        <span class="pinned-text">{{ pinnedMsg.type === 'file' ? pinnedMsg.fileName : pinnedMsg.content }}</span>
+        <span class="pinned-jump">定位</span>
+        <button class="pinned-unpin" title="取消置顶" @click.stop="togglePin(pinnedMsg)">✕</button>
+      </div>
+
       <!-- 主消息列表 -->
       <main v-if="!showTrash" ref="listEl" class="list" @scroll="onScroll">
-        <!-- 置顶条 -->
-        <div v-if="pinnedMsg" class="pinned-bar">
-          <span class="pinned-icon">📌</span>
-          <span class="pinned-text">{{ pinnedMsg.type === 'file' ? pinnedMsg.fileName : pinnedMsg.content }}</span>
-          <button class="pinned-unpin" title="取消置顶" @click="togglePin(pinnedMsg)">✕</button>
-        </div>
         <button v-if="hasMore && !isSearching" class="load-more" :disabled="loadingOlder" @click="loadMore">
           {{ loadingOlder ? '加载中…' : '加载更早的消息' }}
         </button>
@@ -602,6 +662,20 @@ function showToast(msg) {
         <div class="modal-actions">
           <button class="btn" @click="showDeleteRoom = false; adminPassword = ''; deleteRoomError = ''">取消</button>
           <button class="btn danger" :disabled="deleting || !adminPassword" @click="submitDeleteRoom">{{ deleting ? '删除中…' : '永久删除' }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 管理密码确认（删回收站等高危操作通用） -->
+    <div v-if="adminConfirm" class="modal-backdrop" @click.self="adminConfirm = null">
+      <div class="modal">
+        <h3>{{ adminConfirm.action === 'emptyTrash' ? '清空回收站' : '彻底删除消息' }}</h3>
+        <p class="modal-text danger-text">{{ adminConfirm.action === 'emptyTrash' ? '将永久删除回收站全部消息和文件，不可恢复。' : '该消息将永久删除，文件一并清除，不可恢复。' }}</p>
+        <input v-model="adminPassword" class="modal-input" type="password" placeholder="管理密码（验证一次后不再询问）" @keydown.enter="submitAdminConfirm" />
+        <p v-if="adminConfirmError" class="modal-err">{{ adminConfirmError }}</p>
+        <div class="modal-actions">
+          <button class="btn" @click="adminConfirm = null; adminPassword = ''; adminConfirmError = ''">取消</button>
+          <button class="btn danger" :disabled="!adminPassword" @click="submitAdminConfirm">确认删除</button>
         </div>
       </div>
     </div>
