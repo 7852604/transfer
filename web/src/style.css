@@ -417,6 +417,21 @@ textarea {
   background: rgb(239 68 68 / 8%);
 }
 
+.sidebar-version {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: var(--sp-2) 0 var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--ink-4);
+  font-variant-numeric: tabular-nums;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.sidebar-version:hover {
+  color: var(--ink-3);
+}
+
 /* 移动端侧边栏：抽屉 */
 .sidebar-backdrop {
   position: fixed;

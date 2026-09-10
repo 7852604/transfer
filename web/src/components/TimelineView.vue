@@ -217,6 +217,13 @@ function cycleTheme() {
 const themeIcon = computed(() => (theme.value === 'auto' ? '🌗' : theme.value === 'dark' ? '🌙' : '☀️'))
 const themeLabel = computed(() => (theme.value === 'auto' ? '主题：跟随系统' : theme.value === 'dark' ? '主题：暗色' : '主题：亮色'))
 
+const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'
+const buildTime = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : ''
+
+function showVersion() {
+  showToast(`速传 v${appVersion}${buildTime ? ' · 构建 ' + buildTime : ''}`)
+}
+
 // ---------- 消息加载 ----------
 
 async function loadInitial() {
@@ -456,6 +463,7 @@ function showToast(msg) {
         <button class="sidebar-tool" @click="showClear = true; showSidebar = false"><span>⚠</span><span>清空本房间</span></button>
         <button v-if="currentRoom?.id !== 1" class="sidebar-tool danger" @click="showDeleteRoom = true; showSidebar = false"><span>🗑</span><span>删除本房间…</span></button>
         <button class="sidebar-tool" @click="cycleTheme"><span>{{ themeIcon }}</span><span>{{ themeLabel }}</span></button>
+        <button class="sidebar-version" @click="showVersion">v{{ appVersion }}</button>
       </div>
     </aside>
 
