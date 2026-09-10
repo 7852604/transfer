@@ -57,6 +57,32 @@
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* ---------- 暗色主题 ---------- */
+
+[data-theme='dark'] {
+  --paper: #12141a;
+  --paper-2: #171a21;
+  --card: #1c1f27;
+  --ink: #e8eaf0;
+  --ink-2: #c9cdd8;
+  --ink-3: #9298a6;
+  --ink-4: #6b7180;
+  --line: #2a2e39;
+  --line-2: #232732;
+  --accent: #818cf8;
+  --accent-hover: #a5b0fc;
+  --accent-soft: #262a44;
+  --accent-line: #3d4370;
+  --danger: #f87171;
+  --danger-soft: #2d1c1e;
+  --success: #34d399;
+
+  --shadow-xs: 0 1px 0 rgb(0 0 0 / 20%);
+  --shadow-sm: 0 1px 3px rgb(0 0 0 / 30%), 0 1px 2px rgb(0 0 0 / 25%);
+  --shadow-md: 0 4px 16px rgb(0 0 0 / 35%), 0 1px 3px rgb(0 0 0 / 25%);
+  --shadow-lg: 0 12px 40px rgb(0 0 0 / 45%), 0 4px 12px rgb(0 0 0 / 35%);
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -410,7 +436,7 @@ textarea {
 }
 
 .topbar {
-  background: rgb(255 255 255 / 80%);
+  background: color-mix(in srgb, var(--card) 80%, transparent);
   backdrop-filter: blur(16px) saturate(1.4);
   -webkit-backdrop-filter: blur(16px) saturate(1.4);
   border-bottom: 1px solid var(--line);
@@ -1180,6 +1206,59 @@ textarea {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ---------- 置顶条 ---------- */
+
+.pinned-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-3);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.pinned-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+}
+
+.pinned-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+.pinned-unpin {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-full);
+  color: var(--ink-4);
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.pinned-unpin:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+
+/* ---------- 弹窗辅助 ---------- */
+
+.danger-text {
+  color: var(--danger);
 }
 
 /* ---------- 回收站 ---------- */

@@ -27,6 +27,7 @@ func main() {
 	port := env("PORT", "8787")
 	dataDir := env("DATA_DIR", "data")
 	webhookToken := os.Getenv("WEBHOOK_TOKEN")
+	adminPassword := os.Getenv("ADMIN_PASSWORD")
 	cookieSecure := env("COOKIE_SECURE", "") == "1"
 	trashRetainDays := 3
 
@@ -52,13 +53,14 @@ func main() {
 	}
 
 	srv := api.New(api.Config{
-		DataDir:      dataDir,
-		UploadsDir:   uploadsDir,
-		DBPath:       dbPath,
-		MaxFileBytes: 50 << 20,
-		MaxTextLen:   64 * 1024,
-		CookieSecure: cookieSecure,
-		WebhookToken: webhookToken,
+		DataDir:       dataDir,
+		UploadsDir:    uploadsDir,
+		DBPath:        dbPath,
+		MaxFileBytes:  50 << 20,
+		MaxTextLen:    64 * 1024,
+		CookieSecure:  cookieSecure,
+		WebhookToken:  webhookToken,
+		AdminPassword: adminPassword,
 	}, st, bk)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

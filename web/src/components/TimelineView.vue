@@ -22,8 +22,15 @@ const showClear = ref(false)
 const showPasswordDialog = ref(false)
 const passwordInput = ref('')
 const passwordError = ref('')
+const showDeleteRoom = ref(false)
+const adminPassword = ref('')
+const deleteRoomError = ref('')
+const deleting = ref(false)
 const viewerMsg = ref(null)
 const dragging = ref(false)
+
+// 暗色模式：'auto' | 'light' | 'dark'
+const theme = ref(localStorage.getItem('theme') || 'auto')
 
 // 房间状态
 const rooms = ref([])
@@ -62,6 +69,11 @@ let uid = 0
 let dragDepth = 0
 
 onMounted(async () => {
+  applyTheme(theme.value)
+  // 系统主题变化时，若处于跟随模式则实时切换
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (theme.value === 'auto') applyTheme('auto')
+  })
   await loadRooms()
   await loadInitial()
   pollTimer = setInterval(poll, POLL_MS)
@@ -147,6 +159,63 @@ async function submitSetPassword() {
     showToast(updated.hasPassword ? '已设置密码' : '已取消加密')
   } catch (e) { passwordError.value = e.message || '设置失败' }
 }
+
+// ---------- 置顶 ----------
+
+const pinnedMsg = computed(() => {
+  const pid = currentRoom.value?.pinnedMsgId
+  if (!pid) return null
+  return messages.value.find((m) => m.id === pid) || null
+})
+
+async function togglePin(msg) {
+  const target = pinnedMsg.value?.id === msg.id ? 0 : msg.id
+  try {
+    const updated = await api.pinMessage(target)
+    rooms.value = rooms.value.map((r) => (r.id === updated.id ? updated : r))
+    currentRoom.value = updated
+    showToast(target ? '已置顶' : '已取消置顶')
+  } catch (e) { showToast(e.message || '置顶失败') }
+}
+
+// ---------- 删除房间 ----------
+
+async function submitDeleteRoom() {
+  if (deleting.value) return
+  deleteRoomError.value = ''
+  deleting.value = true
+  try {
+    await api.deleteRoom(adminPassword.value)
+    showDeleteRoom.value = false
+    adminPassword.value = ''
+    rooms.value = rooms.value.filter((r) => r.id !== currentRoom.value?.id)
+    currentRoom.value = rooms.value.find((r) => r.id === 1) || rooms.value[0]
+    messages.value = []
+    await loadInitial()
+    showToast('房间已删除')
+  } catch (e) {
+    deleteRoomError.value = e.message || '删除失败'
+  }
+  deleting.value = false
+}
+
+// ---------- 暗色模式 ----------
+
+function applyTheme(t) {
+  const dark = t === 'dark' || (t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+}
+
+function cycleTheme() {
+  const order = ['auto', 'light', 'dark']
+  theme.value = order[(order.indexOf(theme.value) + 1) % order.length]
+  localStorage.setItem('theme', theme.value)
+  applyTheme(theme.value)
+  showToast(theme.value === 'auto' ? '跟随系统' : theme.value === 'dark' ? '暗色模式' : '亮色模式')
+}
+
+const themeIcon = computed(() => (theme.value === 'auto' ? '🌗' : theme.value === 'dark' ? '🌙' : '☀️'))
+const themeLabel = computed(() => (theme.value === 'auto' ? '主题：跟随系统' : theme.value === 'dark' ? '主题：暗色' : '主题：亮色'))
 
 // ---------- 消息加载 ----------
 
@@ -384,7 +453,9 @@ function showToast(msg) {
         <button class="sidebar-tool" @click="openTrash"><span>🗑</span><span>回收站</span></button>
         <button class="sidebar-tool" @click="backupNow"><span>💾</span><span>立即备份</span></button>
         <button class="sidebar-tool" @click="showCleanup = true; showSidebar = false"><span>🧹</span><span>清理旧消息</span></button>
-        <button class="sidebar-tool danger" @click="showClear = true; showSidebar = false"><span>⚠</span><span>清空本房间</span></button>
+        <button class="sidebar-tool" @click="showClear = true; showSidebar = false"><span>⚠</span><span>清空本房间</span></button>
+        <button v-if="currentRoom?.id !== 1" class="sidebar-tool danger" @click="showDeleteRoom = true; showSidebar = false"><span>🗑</span><span>删除本房间…</span></button>
+        <button class="sidebar-tool" @click="cycleTheme"><span>{{ themeIcon }}</span><span>{{ themeLabel }}</span></button>
       </div>
     </aside>
 
@@ -408,12 +479,18 @@ function showToast(msg) {
 
       <!-- 主消息列表 -->
       <main v-if="!showTrash" ref="listEl" class="list" @scroll="onScroll">
+        <!-- 置顶条 -->
+        <div v-if="pinnedMsg" class="pinned-bar">
+          <span class="pinned-icon">📌</span>
+          <span class="pinned-text">{{ pinnedMsg.type === 'file' ? pinnedMsg.fileName : pinnedMsg.content }}</span>
+          <button class="pinned-unpin" title="取消置顶" @click="togglePin(pinnedMsg)">✕</button>
+        </div>
         <button v-if="hasMore && !isSearching" class="load-more" :disabled="loadingOlder" @click="loadMore">
           {{ loadingOlder ? '加载中…' : '加载更早的消息' }}
         </button>
         <template v-for="g in groups" :key="g.day">
           <div class="day-sep">{{ g.day }}</div>
-          <MessageItem v-for="m in g.items" :key="m.id" :msg="m" @delete="deleteMessage" @preview="viewerMsg = $event" />
+          <MessageItem v-for="m in g.items" :key="m.id" :msg="m" :pinned="currentRoom?.pinnedMsgId === m.id" @delete="deleteMessage" @preview="viewerMsg = $event" @pin="togglePin" />
         </template>
         <div v-for="u in uploads" :key="u.key" class="msg upload-item">
           <div class="bubble">
@@ -503,6 +580,20 @@ function showToast(msg) {
         <div class="modal-actions">
           <button class="btn" @click="showPasswordDialog = false; passwordInput = ''">取消</button>
           <button class="btn primary" @click="submitSetPassword">{{ currentRoom?.hasPassword ? (passwordInput.trim() ? '修改' : '取消加密') : '设置' }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 删除房间 -->
+    <div v-if="showDeleteRoom" class="modal-backdrop" @click.self="showDeleteRoom = false">
+      <div class="modal">
+        <h3>删除房间「{{ currentRoom?.name }}」</h3>
+        <p class="modal-text danger-text">将永久删除本房间及全部消息和文件，<strong>不进回收站，不可恢复</strong>。请输入管理密码确认。</p>
+        <input v-model="adminPassword" class="modal-input" type="password" placeholder="管理密码（ADMIN_PASSWORD）" @keydown.enter="submitDeleteRoom" />
+        <p v-if="deleteRoomError" class="modal-err">{{ deleteRoomError }}</p>
+        <div class="modal-actions">
+          <button class="btn" @click="showDeleteRoom = false; adminPassword = ''; deleteRoomError = ''">取消</button>
+          <button class="btn danger" :disabled="deleting || !adminPassword" @click="submitDeleteRoom">{{ deleting ? '删除中…' : '永久删除' }}</button>
         </div>
       </div>
     </div>

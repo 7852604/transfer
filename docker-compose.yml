@@ -8,6 +8,8 @@ services:
       - WEBHOOK_TOKEN=${WEBHOOK_TOKEN:?请先在 .env 里设置 WEBHOOK_TOKEN}
       # 走 nginx HTTPS 反代时开启（cookie 带 Secure 标记）
       - COOKIE_SECURE=${COOKIE_SECURE:-0}
+      # 删除房间等管理操作的全局密码（.env 里设置，未设置则功能禁用）
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
     ports:
       # 只绑本机回环，不直接暴露公网，由 nginx 反代对外提供服务
       - "127.0.0.1:8787:8787"

@@ -18,6 +18,8 @@ export const api = {
   loginRoom: (room, password) => request(`/api/rooms/${encodeURIComponent(room)}/login`, { method: 'POST', body: JSON.stringify({ password }) }),
   logoutRoom: () => request('/api/rooms/logout', { method: 'POST' }),
   setRoomPassword: (password) => request('/api/rooms/password', { method: 'POST', body: JSON.stringify({ password }) }),
+  deleteRoom: (adminPassword) => request('/api/rooms/current', { method: 'DELETE', body: JSON.stringify({ adminPassword }) }),
+  pinMessage: (messageId) => request('/api/rooms/pin', { method: 'POST', body: JSON.stringify({ messageId }) }),
 
   // 消息
   messages: (params) => request('/api/messages?' + new URLSearchParams(params)),

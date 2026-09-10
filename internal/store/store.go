@@ -14,10 +14,11 @@ import (
 )
 
 type Room struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	HasPassword bool  `json:"hasPassword"`
-	CreatedAt int64  `json:"createdAt"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	HasPassword bool   `json:"hasPassword"`
+	CreatedAt   int64  `json:"createdAt"`
+	PinnedMsgID int64  `json:"pinnedMsgId"`
 }
 
 type Message struct {
@@ -31,6 +32,7 @@ type Message struct {
 	FileMime  string `json:"fileMime,omitempty"`
 	IsImage   bool   `json:"isImage,omitempty"`
 	CreatedAt int64  `json:"createdAt"`
+	Deleted   bool   `json:"-"` // 是否在回收站（内部用）
 }
 
 var ErrNotFound = errors.New("not found")
@@ -69,10 +71,11 @@ func (s *Store) migrate() error {
 	// 迁移：如果旧表没有 room_id/deleted_at 列，用 ALTER TABLE 补上
 	_, err := s.db.Exec(`
 CREATE TABLE IF NOT EXISTS rooms (
-	id         INTEGER PRIMARY KEY AUTOINCREMENT,
-	name       TEXT    NOT NULL UNIQUE,
-	password   TEXT    NOT NULL DEFAULT '',
-	created_at INTEGER NOT NULL
+	id             INTEGER PRIMARY KEY AUTOINCREMENT,
+	name           TEXT    NOT NULL UNIQUE,
+	password       TEXT    NOT NULL DEFAULT '',
+	created_at     INTEGER NOT NULL,
+	pinned_msg_id  INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS messages (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,6 +106,7 @@ CREATE TABLE IF NOT EXISTS tokens (
 	for _, col := range []string{"room_id"} {
 		s.db.Exec(fmt.Sprintf(`ALTER TABLE tokens ADD COLUMN %s INTEGER NOT NULL DEFAULT 0`, col))
 	}
+	s.db.Exec(`ALTER TABLE rooms ADD COLUMN pinned_msg_id INTEGER NOT NULL DEFAULT 0`)
 	// 确保默认房间存在
 	s.db.Exec(`INSERT OR IGNORE INTO rooms (id, name, password, created_at) VALUES (1, 'BUG反馈', '', ?)`, nowMillis())
 	return nil
@@ -126,13 +130,16 @@ func scanMessage(row scanner) (Message, error) {
 	}
 	m.FileID, m.FileName, m.FileMime = fileID.V, fileName.V, fileMime.V
 	m.IsImage = isImage == 1
+	m.Deleted = deletedAt > 0
 	return m, nil
 }
 
 // ---------- 房间 ----------
 
+const roomCols = `id, name, CASE WHEN password = '' THEN 0 ELSE 1 END, created_at, pinned_msg_id`
+
 func (s *Store) ListRooms() ([]Room, error) {
-	rows, err := s.db.Query(`SELECT id, name, CASE WHEN password = '' THEN 0 ELSE 1 END, created_at FROM rooms ORDER BY id ASC`)
+	rows, err := s.db.Query(`SELECT ` + roomCols + ` FROM rooms ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +147,7 @@ func (s *Store) ListRooms() ([]Room, error) {
 	rooms := []Room{}
 	for rows.Next() {
 		var r Room
-		if err := rows.Scan(&r.ID, &r.Name, &r.HasPassword, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.HasPassword, &r.CreatedAt, &r.PinnedMsgID); err != nil {
 			return nil, err
 		}
 		rooms = append(rooms, r)
@@ -150,7 +157,7 @@ func (s *Store) ListRooms() ([]Room, error) {
 
 func (s *Store) GetRoom(name string) (Room, error) {
 	var r Room
-	err := s.db.QueryRow(`SELECT id, name, CASE WHEN password = '' THEN 0 ELSE 1 END, created_at FROM rooms WHERE name = ?`, name).Scan(&r.ID, &r.Name, &r.HasPassword, &r.CreatedAt)
+	err := s.db.QueryRow(`SELECT `+roomCols+` FROM rooms WHERE name = ?`, name).Scan(&r.ID, &r.Name, &r.HasPassword, &r.CreatedAt, &r.PinnedMsgID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -159,7 +166,7 @@ func (s *Store) GetRoom(name string) (Room, error) {
 
 func (s *Store) GetRoomByID(id int64) (Room, error) {
 	var r Room
-	err := s.db.QueryRow(`SELECT id, name, CASE WHEN password = '' THEN 0 ELSE 1 END, created_at FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &r.HasPassword, &r.CreatedAt)
+	err := s.db.QueryRow(`SELECT `+roomCols+` FROM rooms WHERE id = ?`, id).Scan(&r.ID, &r.Name, &r.HasPassword, &r.CreatedAt, &r.PinnedMsgID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -231,6 +238,22 @@ func (s *Store) CheckRoomPassword(id int64, password string) (bool, error) {
 func (s *Store) SetRoomPassword(id int64, password string) error {
 	_, err := s.db.Exec(`UPDATE rooms SET password = ? WHERE id = ?`, hashPassword(password), id)
 	return err
+}
+
+// PinMessage 置顶消息到房间。msgID 为 0 表示取消置顶。
+func (s *Store) PinMessage(roomID, msgID int64) error {
+	_, err := s.db.Exec(`UPDATE rooms SET pinned_msg_id = ? WHERE id = ?`, msgID, roomID)
+	return err
+}
+
+// ClearPinIfPinned 若 msgID 是 roomID 的置顶消息则解除置顶，返回是否解除过。
+func (s *Store) ClearPinIfPinned(roomID, msgID int64) (bool, error) {
+	res, err := s.db.Exec(`UPDATE rooms SET pinned_msg_id = 0 WHERE id = ? AND pinned_msg_id = ?`, roomID, msgID)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // ---------- 消息 ----------
@@ -310,14 +333,18 @@ func (s *Store) List(roomID, after, before int64, limit int) ([]Message, bool, e
 	return msgs, hasMore, nil
 }
 
-// SoftDelete 软删除：标记 deleted_at，消息进入回收站
+// SoftDelete 软删除：标记 deleted_at，消息进入回收站。若被置顶则同时解除置顶。
 func (s *Store) SoftDelete(id int64) (Message, error) {
 	m, err := s.Get(id)
 	if err != nil {
 		return m, err
 	}
 	_, err = s.db.Exec(`UPDATE messages SET deleted_at = ? WHERE id = ?`, nowMillis(), id)
-	return m, err
+	if err != nil {
+		return m, err
+	}
+	s.ClearPinIfPinned(m.RoomID, id)
+	return m, nil
 }
 
 // Restore 从回收站恢复消息
@@ -344,14 +371,18 @@ func (s *Store) GetByFileIDRaw(id int64) (Message, error) {
 	return scanMessage(row)
 }
 
-// PermanentDelete 永久删除单条消息（从回收站清除）
+// PermanentDelete 永久删除单条消息（从回收站清除）。若被置顶则同时解除置顶。
 func (s *Store) PermanentDelete(id int64) (Message, error) {
 	m, err := s.GetByFileIDRaw(id)
 	if err != nil {
 		return m, err
 	}
 	_, err = s.db.Exec(`DELETE FROM messages WHERE id = ?`, id)
-	return m, err
+	if err != nil {
+		return m, err
+	}
+	s.ClearPinIfPinned(m.RoomID, id)
+	return m, nil
 }
 
 // ListTrash 列出某房间的回收站消息
@@ -422,6 +453,7 @@ func (s *Store) DeleteBefore(roomID, ts int64) ([]Message, error) {
 	if _, err := s.db.Exec(`DELETE FROM messages WHERE room_id = ? AND deleted_at = 0 AND created_at < ?`, roomID, ts); err != nil {
 		return nil, err
 	}
+	s.PinMessage(roomID, 0) // 置顶消息可能已被清掉，直接解除
 	return msgs, nil
 }
 
@@ -447,6 +479,7 @@ func (s *Store) DeleteAll(roomID int64) ([]Message, error) {
 	if _, err := s.db.Exec(`DELETE FROM messages WHERE room_id = ? AND deleted_at = 0`, roomID); err != nil {
 		return nil, err
 	}
+	s.PinMessage(roomID, 0) // 消息全清了，置顶一并解除
 	return msgs, nil
 }
 

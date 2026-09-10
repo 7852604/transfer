@@ -18,13 +18,14 @@ import (
 )
 
 type Config struct {
-	DataDir      string
-	UploadsDir   string
-	DBPath       string
-	MaxFileBytes int64
-	MaxTextLen   int
-	CookieSecure bool
-	WebhookToken string // BUG反馈房间外部调用 Token
+	DataDir       string
+	UploadsDir    string
+	DBPath        string
+	MaxFileBytes  int64
+	MaxTextLen    int
+	CookieSecure  bool
+	WebhookToken  string // BUG反馈房间外部调用 Token
+	AdminPassword string // 删除房间等管理操作的全局密码；为空则管理操作禁用
 }
 
 type Server struct {
@@ -45,6 +46,24 @@ func New(cfg Config, st *store.Store, bk *backup.Manager) *Server {
 
 const sessionCookie = "room_session"
 
+// clientIP 提取客户端 IP（nginx 反代场景优先 X-Forwarded-For 首段）
+func clientIP(r *http.Request) string {
+	if xf := r.Header.Get("X-Forwarded-For"); xf != "" {
+		if i := strings.IndexByte(xf, ','); i > 0 {
+			return strings.TrimSpace(xf[:i])
+		}
+		return strings.TrimSpace(xf)
+	}
+	if xr := r.Header.Get("X-Real-IP"); xr != "" {
+		return strings.TrimSpace(xr)
+	}
+	host := r.RemoteAddr
+	if i := strings.LastIndexByte(host, ':'); i > 0 {
+		host = host[:i]
+	}
+	return host
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -54,6 +73,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/rooms/{room}/login", s.handleRoomLogin)
 	mux.HandleFunc("POST /api/rooms/logout", s.handleRoomLogout)
 	mux.Handle("POST /api/rooms/password", s.roomAuth(s.handleSetRoomPassword))
+	mux.Handle("DELETE /api/rooms/current", s.roomAuth(s.handleDeleteRoom))
+	mux.Handle("POST /api/rooms/pin", s.roomAuth(s.handlePinMessage))
 
 	// 房间内操作（需要 room session）
 	mux.Handle("GET /api/messages", s.roomAuth(s.handleListMessages))
@@ -237,10 +258,47 @@ func (s *Server) handleSetRoomPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
+// delRoomAttempts 每分钟每 IP 最多 10 次删除房间尝试
+var delRoomAttempts = map[string][]time.Time{}
+
+func delRoomRateLimited(ip string) bool {
+	now := time.Now()
+	window := now.Add(-time.Minute)
+	keep := delRoomAttempts[ip][:0]
+	for _, t := range delRoomAttempts[ip] {
+		if t.After(window) {
+			keep = append(keep, t)
+		}
+	}
+	if len(keep) >= 10 {
+		delRoomAttempts[ip] = keep
+		return true
+	}
+	delRoomAttempts[ip] = append(keep, now)
+	return false
+}
+
+// 删除当前房间（连同全部消息，不进回收站）。需要全局管理密码。
+// ADMIN_PASSWORD 未配置时功能整体禁用。
 func (s *Server) handleDeleteRoom(w http.ResponseWriter, r *http.Request) {
 	room := getRoom(r)
+	if s.cfg.AdminPassword == "" {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "未配置 ADMIN_PASSWORD，删除房间功能已禁用"})
+		return
+	}
 	if room.ID == 1 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "不能删除默认房间"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "默认房间不能删除"})
+		return
+	}
+	if delRoomRateLimited(clientIP(r)) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "尝试太频繁，请稍后再试"})
+		return
+	}
+	var body struct{ AdminPassword string `json:"adminPassword"` }
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
+	if subtle.ConstantTimeCompare([]byte(body.AdminPassword), []byte(s.cfg.AdminPassword)) != 1 {
+		time.Sleep(200 * time.Millisecond)
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "管理密码不对"})
 		return
 	}
 	msgs, err := s.store.DeleteRoom(room.ID)
@@ -253,6 +311,40 @@ func (s *Server) handleDeleteRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": len(msgs)})
+}
+
+// 置顶/取消置顶当前房间的一条消息
+func (s *Server) handlePinMessage(w http.ResponseWriter, r *http.Request) {
+	room := getRoom(r)
+	var body struct {
+		MessageID int64 `json:"messageId"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
+		return
+	}
+	// 取消置顶直接清
+	if body.MessageID == 0 {
+		if err := s.store.PinMessage(room.ID, 0); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "取消置顶失败"})
+			return
+		}
+		updated, _ := s.store.GetRoomByID(room.ID)
+		writeJSON(w, http.StatusOK, updated)
+		return
+	}
+	// 置顶前确认消息存在且属于本房间、未被删除
+	m, err := s.store.Get(body.MessageID)
+	if err != nil || m.RoomID != room.ID || m.Deleted {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "消息不存在或不属于本房间"})
+		return
+	}
+	if err := s.store.PinMessage(room.ID, body.MessageID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "置顶失败"})
+		return
+	}
+	updated, _ := s.store.GetRoomByID(room.ID)
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // ---------- 消息 ----------

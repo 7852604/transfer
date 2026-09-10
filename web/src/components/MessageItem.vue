@@ -3,8 +3,8 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
 import { formatSize, formatTime, linkify } from '../utils'
 
-const props = defineProps({ msg: { type: Object, required: true } })
-const emit = defineEmits(['delete', 'preview'])
+const props = defineProps({ msg: { type: Object, required: true }, pinned: { type: Boolean, default: false } })
+const emit = defineEmits(['delete', 'preview', 'pin'])
 
 const expanded = ref(false)
 const collapsible = ref(false)
@@ -103,6 +103,9 @@ function onDelete() {
       <span class="msg-time">{{ formatTime(msg.createdAt) }}</span>
       <button v-if="msg.type === 'text'" class="meta-btn" @click="copy">
         {{ copied ? '已复制' : '复制' }}
+      </button>
+      <button class="meta-btn" @click="emit('pin', props.msg)">
+        {{ pinned ? '取消置顶' : '置顶' }}
       </button>
       <button class="meta-btn" :class="{ danger: confirming }" @click="onDelete">
         {{ confirming ? '确认删除？' : '删除' }}
