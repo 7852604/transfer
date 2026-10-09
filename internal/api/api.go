@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"transfer/internal/backup"
@@ -108,7 +109,7 @@ func (s *Server) Handler() http.Handler {
 	// 静态资源
 	mux.Handle("/", s.spa())
 
-	return logRequest(securityHeaders(mux))
+	return logRequest(rateLimitGlobal(securityHeaders(mux)))
 }
 
 // ---------- 房间鉴权 ----------
@@ -210,6 +211,11 @@ func (s *Server) handleRoomLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Password string `json:"password"` }
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
 	if room.HasPassword {
+		// 仅对加密房间的密码尝试限流（无密码房间的切房不计入）
+		if !loginLimiter.allow(clientIP(r)) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "尝试太频繁，请稍后再试"})
+			return
+		}
 		ok, _ := s.store.CheckRoomPassword(room.ID, body.Password)
 		if !ok {
 			time.Sleep(200 * time.Millisecond)
@@ -261,24 +267,54 @@ func (s *Server) handleSetRoomPassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
-// delRoomAttempts 每分钟每 IP 最多 10 次管理密码尝试
-var delRoomAttempts = map[string][]time.Time{}
+// ---------- 限流 ----------
 
-func adminRateLimited(ip string) bool {
+// rateLimiter 滑动窗口限流：每 key（IP）每 window 最多 limit 次
+type rateLimiter struct {
+	mu     sync.Mutex
+	hits   map[string][]time.Time
+	limit  int
+	window time.Duration
+}
+
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	return &rateLimiter{hits: map[string][]time.Time{}, limit: limit, window: window}
+}
+
+func (rl *rateLimiter) allow(key string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
 	now := time.Now()
-	window := now.Add(-time.Minute)
-	keep := delRoomAttempts[ip][:0]
-	for _, t := range delRoomAttempts[ip] {
-		if t.After(window) {
+	cutoff := now.Add(-rl.window)
+	keep := rl.hits[key][:0]
+	for _, t := range rl.hits[key] {
+		if t.After(cutoff) {
 			keep = append(keep, t)
 		}
 	}
-	if len(keep) >= 10 {
-		delRoomAttempts[ip] = keep
-		return true
+	if len(keep) >= rl.limit {
+		rl.hits[key] = keep
+		return false
 	}
-	delRoomAttempts[ip] = append(keep, now)
-	return false
+	rl.hits[key] = append(keep, now)
+	return true
+}
+
+var (
+	adminLimiter  = newRateLimiter(10, time.Minute)  // 管理密码尝试：10 次/分/IP
+	loginLimiter  = newRateLimiter(10, time.Minute)  // 房间密码尝试：10 次/分/IP
+	globalLimiter = newRateLimiter(300, time.Minute) // 全局请求：300 次/分/IP，防扫描
+)
+
+// 全局限速中间件：公网暴露场景下拦住暴力扫描
+func rateLimitGlobal(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !globalLimiter.allow(clientIP(r)) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "请求太频繁，请稍后再试"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // adminEnabled 管理操作是否可用（配置了 ADMIN_PASSWORD 才启用）
@@ -302,6 +338,7 @@ func (s *Server) adminCookieValue() string {
 
 // verifyAdmin 校验管理密码。通过则下发 admin_session cookie 并返回 true。
 // 未配置 ADMIN_PASSWORD 或被限速时直接写响应并返回 false。
+// 未携带密码的探测（bodyPassword 为空）不计入限流，前端可先尝试后弹框。
 func (s *Server) verifyAdmin(w http.ResponseWriter, r *http.Request, bodyPassword string) bool {
 	if !s.adminEnabled() {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "未配置 ADMIN_PASSWORD，管理操作已禁用"})
@@ -310,7 +347,11 @@ func (s *Server) verifyAdmin(w http.ResponseWriter, r *http.Request, bodyPasswor
 	if s.adminVerified(r) {
 		return true
 	}
-	if adminRateLimited(clientIP(r)) {
+	if bodyPassword == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "需要管理密码"})
+		return false
+	}
+	if !adminLimiter.allow(clientIP(r)) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "尝试太频繁，请稍后再试"})
 		return false
 	}
@@ -528,11 +569,18 @@ func (s *Server) handleEmptyTrash(w http.ResponseWriter, r *http.Request) {
 
 // ---------- 批量清理 ----------
 
+// 清理 N 天前的消息（进回收站）。需要管理密码（验证一次后本浏览器免验）。
 func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	room := getRoom(r)
-	var body struct{ Days int `json:"days"` }
+	var body struct {
+		Days          int    `json:"days"`
+		AdminPassword string `json:"adminPassword"`
+	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil || body.Days <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请指定要清理多少天前的消息"})
+		return
+	}
+	if !s.verifyAdmin(w, r, body.AdminPassword) {
 		return
 	}
 	ts := time.Now().AddDate(0, 0, -body.Days).UnixMilli()
@@ -549,8 +597,14 @@ func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": len(msgs), "freedBytes": freed})
 }
 
+// 清空当前房间全部消息（进回收站）。需要管理密码（验证一次后本浏览器免验）。
 func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
 	room := getRoom(r)
+	var body struct{ AdminPassword string `json:"adminPassword"` }
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
+	if !s.verifyAdmin(w, r, body.AdminPassword) {
+		return
+	}
 	msgs, err := s.store.DeleteAll(room.ID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "清空失败"})
@@ -596,7 +650,13 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// 立即备份。需要管理密码（验证一次后本浏览器免验）。
 func (s *Server) handleBackupNow(w http.ResponseWriter, r *http.Request) {
+	var body struct{ AdminPassword string `json:"adminPassword"` }
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
+	if !s.verifyAdmin(w, r, body.AdminPassword) {
+		return
+	}
 	name, size, err := s.backups.Run()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "备份失败: " + err.Error()})
@@ -723,7 +783,7 @@ func logRequest(next http.Handler) http.Handler {
 			sw := &statusWriter{ResponseWriter: w, status: 200}
 			start := time.Now()
 			next.ServeHTTP(sw, r)
-			log.Printf("%s %s %d %s", r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Millisecond))
+			log.Printf("%s %s %d %s ip=%s", r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Millisecond), clientIP(r))
 			return
 		}
 		next.ServeHTTP(w, r)

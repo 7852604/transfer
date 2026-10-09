@@ -9,11 +9,29 @@ export function escapeHtml(s) {
 
 const URL_RE = /(https?:\/\/[^\s<>"']+)/g
 
-// 先整体转义再做链接替换，防 XSS；长 URL 靠 CSS overflow-wrap 换行
-export function linkify(text) {
-  return escapeHtml(text).replace(URL_RE, (m) => {
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// 对已转义的文本段做关键词高亮（多关键词、不区分大小写）
+function highlightSegments(html, highlight) {
+  const words = highlight.trim().split(/\s+/).filter(Boolean)
+  if (!words.length) return html
+  const re = new RegExp(words.map((w) => escapeRegExp(escapeHtml(w))).join('|'), 'gi')
+  // 只处理非标签文本段：<a ...>...</a> 保持原样，纯文本段（不含 <）才高亮
+  return html.replace(/(<a [^>]*>[\s\S]*?<\/a>)|([^<]+)/g, (seg, anchor, text) => {
+    if (anchor) return anchor
+    return text.replace(re, (m) => `<mark class="search-hit">${m}</mark>`)
+  })
+}
+
+// 先整体转义再做链接替换，防 XSS；long URL 靠 CSS overflow-wrap 换行。
+// highlight 为搜索关键词，命中处包 <mark> 高亮。
+export function linkify(text, highlight = '') {
+  const html = escapeHtml(text).replace(URL_RE, (m) => {
     return `<a href="${m}" target="_blank" rel="noopener noreferrer">${m}</a>`
   })
+  return highlight ? highlightSegments(html, highlight) : html
 }
 
 export function formatSize(bytes) {

@@ -3,7 +3,11 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
 import { formatSize, formatTime, linkify } from '../utils'
 
-const props = defineProps({ msg: { type: Object, required: true }, pinned: { type: Boolean, default: false } })
+const props = defineProps({
+  msg: { type: Object, required: true },
+  pinned: { type: Boolean, default: false },
+  highlight: { type: String, default: '' },
+})
 const emit = defineEmits(['delete', 'preview', 'pin'])
 
 const expanded = ref(false)
@@ -14,7 +18,26 @@ const textEl = ref(null)
 let confirmTimer = null
 let copyTimer = null
 
-const html = computed(() => linkify(props.msg.content))
+const html = computed(() => linkify(props.msg.content, props.highlight))
+
+const isVideo = computed(() => (props.msg.fileMime || '').startsWith('video/'))
+const isAudio = computed(() => (props.msg.fileMime || '').startsWith('audio/'))
+
+// 按 mime / 扩展名给文件配图标，少一次「下载再看」的猜测
+const fileIcon = computed(() => {
+  const name = (props.msg.fileName || '').toLowerCase()
+  const mime = props.msg.fileMime || ''
+  if (mime.startsWith('video/')) return '🎬'
+  if (mime.startsWith('audio/')) return '🎵'
+  if (mime === 'application/pdf' || name.endsWith('.pdf')) return '📕'
+  if (/\.(zip|rar|7z|tar|gz|bz2|xz)$/.test(name)) return '🗜️'
+  if (/\.(doc|docx|wps)$/.test(name)) return '📘'
+  if (/\.(xls|xlsx|csv|et)$/.test(name)) return '📗'
+  if (/\.(ppt|pptx|dps)$/.test(name)) return '📙'
+  if (/\.(md|txt|rtf|log)$/.test(name)) return '📝'
+  if (/\.(js|ts|jsx|tsx|go|py|java|c|cpp|h|rs|rb|php|sh|bash|zsh|sql|json|ya?ml|toml|xml|html|css|scss|vue|swift|kt)$/.test(name)) return '📜'
+  return '📄'
+})
 
 onMounted(checkCollapse)
 watch(
@@ -89,9 +112,19 @@ function onDelete() {
       />
     </div>
 
+    <!-- 视频消息：直接在线播放 -->
+    <div v-else-if="isVideo" class="bubble bubble-media">
+      <video class="msg-video" :src="api.fileUrl(msg.fileId)" controls preload="metadata"></video>
+    </div>
+
+    <!-- 音频消息：直接在线播放 -->
+    <div v-else-if="isAudio" class="bubble bubble-media">
+      <audio class="msg-audio" :src="api.fileUrl(msg.fileId)" controls preload="metadata"></audio>
+    </div>
+
     <!-- 文件消息 -->
     <a v-else class="bubble file-card" :href="api.downloadUrl(msg.fileId)" :download="msg.fileName">
-      <div class="file-icon">📄</div>
+      <div class="file-icon">{{ fileIcon }}</div>
       <div class="file-meta">
         <div class="file-name">{{ msg.fileName }}</div>
         <div class="file-size">{{ formatSize(msg.fileSize) }}</div>

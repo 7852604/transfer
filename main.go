@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,6 +25,9 @@ func env(key, def string) string {
 }
 
 func main() {
+	// PWA manifest 的正确 MIME 类型（Go 默认表缺失，返回 text/plain 浏览器不解析）
+	mime.AddExtensionType(".webmanifest", "application/manifest+json")
+
 	port := env("PORT", "8787")
 	dataDir := env("DATA_DIR", "data")
 	webhookToken := os.Getenv("WEBHOOK_TOKEN")

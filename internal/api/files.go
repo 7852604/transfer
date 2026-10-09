@@ -115,7 +115,8 @@ func (s *Server) saveUploadToRoom(roomID int64, part *multipart.Part) (*store.Me
 	return &msg, nil
 }
 
-// handleServeFile 输出文件；图片 inline 预览，其余 attachment 下载
+// handleServeFile 输出文件；图片/音视频 inline 预览，其余 attachment 下载。
+// 只允许下载当前房间的文件——防止进了任意房间就能拿其他房间的文件。
 func (s *Server) handleServeFile(w http.ResponseWriter, r *http.Request) {
 	fileID := r.PathValue("fileId")
 	if fileID == "" || strings.ContainsAny(fileID, `/\`) || strings.Contains(fileID, "..") {
@@ -124,6 +125,11 @@ func (s *Server) handleServeFile(w http.ResponseWriter, r *http.Request) {
 	}
 	msg, err := s.store.GetByFileID(fileID)
 	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "文件不存在"})
+		return
+	}
+	// 房间归属校验：不属于当前房间的文件一律 404（不暴露存在性）
+	if room := getRoom(r); msg.RoomID != room.ID {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "文件不存在"})
 		return
 	}
@@ -139,8 +145,11 @@ func (s *Server) handleServeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	inline := msg.IsImage ||
+		strings.HasPrefix(msg.FileMime, "video/") ||
+		strings.HasPrefix(msg.FileMime, "audio/")
 	disposition := "inline"
-	if !msg.IsImage || r.URL.Query().Get("download") == "1" {
+	if !inline || r.URL.Query().Get("download") == "1" {
 		disposition = "attachment"
 	}
 	name := msg.FileName

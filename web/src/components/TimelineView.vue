@@ -24,9 +24,7 @@ const passwordInput = ref('')
 const passwordError = ref('')
 const showDeleteRoom = ref(false)
 const adminPassword = ref('')
-const deleteRoomError = ref('')
-const deleting = ref(false)
-// 管理密码确认弹窗：{ action: 'permanentDelete'|'emptyTrash', msg? }
+// 管理密码确认弹窗：{ action, payload }
 const adminConfirm = ref(null)
 const adminConfirmError = ref('')
 const viewerMsg = ref(null)
@@ -183,23 +181,9 @@ async function togglePin(msg) {
 
 // ---------- 删除房间 ----------
 
-async function submitDeleteRoom() {
-  if (deleting.value) return
-  deleteRoomError.value = ''
-  deleting.value = true
-  try {
-    await api.deleteRoom(adminPassword.value)
-    showDeleteRoom.value = false
-    adminPassword.value = ''
-    rooms.value = rooms.value.filter((r) => r.id !== currentRoom.value?.id)
-    currentRoom.value = rooms.value.find((r) => r.id === 1) || rooms.value[0]
-    messages.value = []
-    await loadInitial()
-    showToast('房间已删除')
-  } catch (e) {
-    deleteRoomError.value = e.message || '删除失败'
-  }
-  deleting.value = false
+function requestDeleteRoom() {
+  showDeleteRoom.value = false
+  runAdminAction('deleteRoom')
 }
 
 // ---------- 暗色模式 ----------
@@ -373,33 +357,93 @@ async function restoreMessage(msg) {
   } catch (e) { showToast('恢复失败') }
 }
 
-async function permanentDelete(msg) {
-  // 需要管理密码确认；已验证过的浏览器后端直接放行
-  adminConfirm.value = { action: 'permanentDelete', msg }
-  adminConfirmError.value = ''
+function permanentDelete(msg) {
+  runAdminAction('permanentDelete', { id: msg.id })
 }
 
-async function emptyTrash() {
-  adminConfirm.value = { action: 'emptyTrash' }
-  adminConfirmError.value = ''
+function emptyTrash() {
+  runAdminAction('emptyTrash')
 }
 
-// 管理密码确认弹窗提交
+// ---------- 管理密码统一流程 ----------
+// 先静默尝试（admin cookie 已验证则直接成功）；401 才弹密码框。验证一次全浏览器通用。
+
+const adminActionDesc = {
+  deleteRoom: '删除房间',
+  permanentDelete: '彻底删除消息',
+  emptyTrash: '清空回收站',
+  backup: '立即备份',
+  clear: '清空本房间',
+  cleanup: '清理旧消息',
+}
+
+async function executeAdminAction(action, payload, pw) {
+  if (action === 'deleteRoom') {
+    await api.deleteRoom(pw)
+    rooms.value = rooms.value.filter((r) => r.id !== currentRoom.value?.id)
+    currentRoom.value = rooms.value.find((r) => r.id === 1) || rooms.value[0]
+    messages.value = []
+    await loadInitial()
+    showToast('房间已删除')
+    return
+  }
+  if (action === 'permanentDelete') {
+    await api.permanentDelete(payload.id, pw)
+    trashItems.value = trashItems.value.filter((m) => m.id !== payload.id)
+    refreshStats()
+    showToast('已彻底删除')
+    return
+  }
+  if (action === 'emptyTrash') {
+    const r = await api.emptyTrash(pw)
+    trashItems.value = []
+    showToast(`已清空回收站，释放 ${formatSize(r.freedBytes)}`)
+    refreshStats()
+    return
+  }
+  if (action === 'backup') {
+    const r = await api.backupNow(pw)
+    showToast(`备份完成：${formatSize(r.size)}`)
+    refreshStats()
+    return
+  }
+  if (action === 'clear') {
+    await api.clearAll(pw)
+    messages.value = []
+    hasMore.value = false
+    refreshStats()
+    showToast('已清空')
+    return
+  }
+  if (action === 'cleanup') {
+    const r = await api.cleanup(payload.days, pw)
+    showToast(`已删除 ${r.deleted} 条，释放 ${formatSize(r.freedBytes)}`)
+    await loadInitial()
+    return
+  }
+}
+
+// 入口：先不带密码尝试；后端要密码（401）时弹框
+async function runAdminAction(action, payload = {}) {
+  try {
+    await executeAdminAction(action, payload, '')
+  } catch (e) {
+    if (e.status === 401) {
+      adminConfirm.value = { action, payload }
+      adminPassword.value = ''
+      adminConfirmError.value = ''
+    } else {
+      showToast(e.message || '操作失败')
+    }
+  }
+}
+
+// 密码弹窗提交：带密码重试
 async function submitAdminConfirm() {
   if (!adminConfirm.value) return
-  const { action, msg } = adminConfirm.value
-  const pw = adminPassword.value
+  const { action, payload } = adminConfirm.value
   try {
-    if (action === 'permanentDelete') {
-      await api.permanentDelete(msg.id, pw)
-      trashItems.value = trashItems.value.filter((m) => m.id !== msg.id)
-      refreshStats()
-    } else if (action === 'emptyTrash') {
-      const r = await api.emptyTrash(pw)
-      trashItems.value = []
-      showToast(`已清空回收站，释放 ${formatSize(r.freedBytes)}`)
-      refreshStats()
-    }
+    await executeAdminAction(action, payload, adminPassword.value)
     adminConfirm.value = null
     adminPassword.value = ''
   } catch (e) {
@@ -449,32 +493,17 @@ async function loadAllTo(targetId) {
 
 async function backupNow() {
   showSidebar.value = false
-  showToast('备份中…')
-  try {
-    const r = await api.backupNow()
-    showToast(`备份完成：${formatSize(r.size)}`)
-    refreshStats()
-  } catch (e) { showToast('备份失败') }
+  runAdminAction('backup')
 }
 
-async function doCleanup(days) {
+function doCleanup(days) {
   showCleanup.value = false
-  try {
-    const r = await api.cleanup(days)
-    showToast(`已删除 ${r.deleted} 条，释放 ${formatSize(r.freedBytes)}`)
-    await loadInitial()
-  } catch (e) { showToast('清理失败') }
+  runAdminAction('cleanup', { days })
 }
 
-async function doClear() {
+function doClear() {
   showClear.value = false
-  try {
-    await api.clearAll()
-    messages.value = []
-    hasMore.value = false
-    refreshStats()
-    showToast('已清空')
-  } catch (e) { showToast('清空失败') }
+  runAdminAction('clear')
 }
 
 async function refreshStats() {
@@ -558,7 +587,7 @@ function showToast(msg) {
         </button>
         <template v-for="g in groups" :key="g.day">
           <div class="day-sep">{{ g.day }}</div>
-          <MessageItem v-for="m in g.items" :key="m.id" :msg="m" :pinned="currentRoom?.pinnedMsgId === m.id" @delete="deleteMessage" @preview="viewerMsg = $event" @pin="togglePin" />
+          <MessageItem v-for="m in g.items" :key="m.id" :msg="m" :pinned="currentRoom?.pinnedMsgId === m.id" :highlight="isSearching ? searchQuery : ''" @delete="deleteMessage" @preview="viewerMsg = $event" @pin="togglePin" />
         </template>
         <div v-for="u in uploads" :key="u.key" class="msg upload-item">
           <div class="bubble">
@@ -652,30 +681,28 @@ function showToast(msg) {
       </div>
     </div>
 
-    <!-- 删除房间 -->
+    <!-- 删除房间（确认后走统一管理密码流程） -->
     <div v-if="showDeleteRoom" class="modal-backdrop" @click.self="showDeleteRoom = false">
       <div class="modal">
         <h3>删除房间「{{ currentRoom?.name }}」</h3>
-        <p class="modal-text danger-text">将永久删除本房间及全部消息和文件，<strong>不进回收站，不可恢复</strong>。请输入管理密码确认。</p>
-        <input v-model="adminPassword" class="modal-input" type="password" placeholder="管理密码（ADMIN_PASSWORD）" @keydown.enter="submitDeleteRoom" />
-        <p v-if="deleteRoomError" class="modal-err">{{ deleteRoomError }}</p>
+        <p class="modal-text danger-text">将永久删除本房间及全部消息和文件，<strong>不进回收站，不可恢复</strong>。</p>
         <div class="modal-actions">
-          <button class="btn" @click="showDeleteRoom = false; adminPassword = ''; deleteRoomError = ''">取消</button>
-          <button class="btn danger" :disabled="deleting || !adminPassword" @click="submitDeleteRoom">{{ deleting ? '删除中…' : '永久删除' }}</button>
+          <button class="btn" @click="showDeleteRoom = false">取消</button>
+          <button class="btn danger" @click="requestDeleteRoom">永久删除</button>
         </div>
       </div>
     </div>
 
-    <!-- 管理密码确认（删回收站等高危操作通用） -->
+    <!-- 管理密码确认（删房间/删回收站/备份/清理等管理操作通用，验证一次全浏览器免验） -->
     <div v-if="adminConfirm" class="modal-backdrop" @click.self="adminConfirm = null">
       <div class="modal">
-        <h3>{{ adminConfirm.action === 'emptyTrash' ? '清空回收站' : '彻底删除消息' }}</h3>
-        <p class="modal-text danger-text">{{ adminConfirm.action === 'emptyTrash' ? '将永久删除回收站全部消息和文件，不可恢复。' : '该消息将永久删除，文件一并清除，不可恢复。' }}</p>
-        <input v-model="adminPassword" class="modal-input" type="password" placeholder="管理密码（验证一次后不再询问）" @keydown.enter="submitAdminConfirm" />
+        <h3>需要管理密码</h3>
+        <p class="modal-text">「{{ adminActionDesc[adminConfirm.action] }}」需要管理密码验证。验证一次后，本浏览器后续管理操作不再询问。</p>
+        <input v-model="adminPassword" class="modal-input" type="password" placeholder="管理密码（ADMIN_PASSWORD）" @keydown.enter="submitAdminConfirm" />
         <p v-if="adminConfirmError" class="modal-err">{{ adminConfirmError }}</p>
         <div class="modal-actions">
           <button class="btn" @click="adminConfirm = null; adminPassword = ''; adminConfirmError = ''">取消</button>
-          <button class="btn danger" :disabled="!adminPassword" @click="submitAdminConfirm">确认删除</button>
+          <button class="btn danger" :disabled="!adminPassword" @click="submitAdminConfirm">确认</button>
         </div>
       </div>
     </div>

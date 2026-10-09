@@ -656,6 +656,9 @@ textarea {
   margin-bottom: var(--sp-3);
   border-radius: var(--r-lg);
   scroll-margin: 60px;
+  /* 长列表性能：屏外消息跳过渲染与布局（千条消息不卡） */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
 }
 
 .bubble {
@@ -712,6 +715,29 @@ textarea {
   border-radius: var(--r-md);
   cursor: zoom-in;
   object-fit: contain;
+}
+
+/* 视频 / 音频 */
+.msg-video {
+  display: block;
+  max-width: min(420px, 100%);
+  max-height: 320px;
+  border-radius: var(--r-md);
+  background: #000;
+}
+
+.msg-audio {
+  display: block;
+  width: min(320px, 100%);
+  height: 40px;
+}
+
+/* 搜索关键词高亮 */
+.search-hit {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 3px;
+  padding: 0 1px;
 }
 
 /* 文件卡片 */

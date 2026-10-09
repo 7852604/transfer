@@ -6,7 +6,9 @@ async function request(path, opts = {}) {
   let data = {}
   try { data = await res.json() } catch { /* 非 JSON */ }
   if (!res.ok) {
-    throw new Error(data.error || `HTTP ${res.status}`)
+    const err = new Error(data.error || `HTTP ${res.status}`)
+    err.status = res.status
+    throw err
   }
   return data
 }
@@ -33,11 +35,11 @@ export const api = {
   emptyTrash: (adminPassword) => request('/api/trash/empty', { method: 'POST', body: JSON.stringify({ adminPassword }) }),
 
   // 其他
-  cleanup: (days) => request('/api/cleanup', { method: 'POST', body: JSON.stringify({ days }) }),
-  clearAll: () => request('/api/clear', { method: 'POST' }),
+  cleanup: (days, adminPassword) => request('/api/cleanup', { method: 'POST', body: JSON.stringify({ days, adminPassword }) }),
+  clearAll: (adminPassword) => request('/api/clear', { method: 'POST', body: JSON.stringify({ adminPassword }) }),
   search: (q) => request('/api/search?q=' + encodeURIComponent(q)),
   stats: () => request('/api/stats'),
-  backupNow: () => request('/api/backup', { method: 'POST' }),
+  backupNow: (adminPassword) => request('/api/backup', { method: 'POST', body: JSON.stringify({ adminPassword }) }),
 
   fileUrl: (fileId) => '/api/files/' + encodeURIComponent(fileId),
   downloadUrl: (fileId) => '/api/files/' + encodeURIComponent(fileId) + '?download=1',

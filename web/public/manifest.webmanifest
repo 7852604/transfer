@@ -1,0 +1,14 @@
+{
+  "name": "速传 - 跨设备中转",
+  "short_name": "速传",
+  "description": "个人跨设备传文字、密码、文件",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fafafb",
+  "theme_color": "#4f46e5",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
