@@ -31,6 +31,7 @@ type Message struct {
 	FileSize  int64  `json:"fileSize,omitempty"`
 	FileMime  string `json:"fileMime,omitempty"`
 	IsImage   bool   `json:"isImage,omitempty"`
+	IsCode    bool   `json:"isCode,omitempty"` // webhook type=code 推送的代码消息，前端等宽渲染
 	CreatedAt int64  `json:"createdAt"`
 	Deleted   bool   `json:"-"` // 是否在回收站（内部用）
 }
@@ -107,21 +108,22 @@ CREATE TABLE IF NOT EXISTS tokens (
 		s.db.Exec(fmt.Sprintf(`ALTER TABLE tokens ADD COLUMN %s INTEGER NOT NULL DEFAULT 0`, col))
 	}
 	s.db.Exec(`ALTER TABLE rooms ADD COLUMN pinned_msg_id INTEGER NOT NULL DEFAULT 0`)
+	s.db.Exec(`ALTER TABLE messages ADD COLUMN is_code INTEGER NOT NULL DEFAULT 0`)
 	// 确保默认房间存在
 	s.db.Exec(`INSERT OR IGNORE INTO rooms (id, name, password, created_at) VALUES (1, 'BUG反馈', '', ?)`, nowMillis())
 	return nil
 }
 
-const msgCols = `id, room_id, type, content, file_id, file_name, file_size, file_mime, is_image, created_at, deleted_at`
+const msgCols = `id, room_id, type, content, file_id, file_name, file_size, file_mime, is_image, is_code, created_at, deleted_at`
 
 type scanner interface{ Scan(dest ...any) error }
 
 func scanMessage(row scanner) (Message, error) {
 	var m Message
-	var isImage int
+	var isImage, isCode int
 	var fileID, fileName, fileMime sql.Null[string]
 	var deletedAt int64
-	err := row.Scan(&m.ID, &m.RoomID, &m.Type, &m.Content, &fileID, &fileName, &m.FileSize, &fileMime, &isImage, &m.CreatedAt, &deletedAt)
+	err := row.Scan(&m.ID, &m.RoomID, &m.Type, &m.Content, &fileID, &fileName, &m.FileSize, &fileMime, &isImage, &isCode, &m.CreatedAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return m, ErrNotFound
 	}
@@ -130,6 +132,7 @@ func scanMessage(row scanner) (Message, error) {
 	}
 	m.FileID, m.FileName, m.FileMime = fileID.V, fileName.V, fileMime.V
 	m.IsImage = isImage == 1
+	m.IsCode = isCode == 1
 	m.Deleted = deletedAt > 0
 	return m, nil
 }
@@ -258,8 +261,12 @@ func (s *Store) ClearPinIfPinned(roomID, msgID int64) (bool, error) {
 
 // ---------- 消息 ----------
 
-func (s *Store) InsertText(roomID int64, content string) (Message, error) {
-	res, err := s.db.Exec(`INSERT INTO messages (room_id, type, content, created_at) VALUES (?, 'text', ?, ?)`, roomID, content, nowMillis())
+func (s *Store) InsertText(roomID int64, content string, isCode bool) (Message, error) {
+	code := 0
+	if isCode {
+		code = 1
+	}
+	res, err := s.db.Exec(`INSERT INTO messages (room_id, type, content, is_code, created_at) VALUES (?, 'text', ?, ?, ?)`, roomID, content, code, nowMillis())
 	if err != nil {
 		return Message{}, err
 	}

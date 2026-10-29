@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { api } from '../api'
 import { formatSize, formatTime, linkify } from '../utils'
+import AppIcon from './AppIcon.vue'
 
 const props = defineProps({
   msg: { type: Object, required: true },
@@ -22,21 +23,20 @@ const html = computed(() => linkify(props.msg.content, props.highlight))
 
 const isVideo = computed(() => (props.msg.fileMime || '').startsWith('video/'))
 const isAudio = computed(() => (props.msg.fileMime || '').startsWith('audio/'))
+const isCode = computed(() => props.msg.isCode || props.msg.type === 'code')
 
-// 按 mime / 扩展名给文件配图标，少一次「下载再看」的猜测
+// 按 mime / 扩展名映射到单色图标，少一次「下载再看」的猜测
 const fileIcon = computed(() => {
   const name = (props.msg.fileName || '').toLowerCase()
   const mime = props.msg.fileMime || ''
-  if (mime.startsWith('video/')) return '🎬'
-  if (mime.startsWith('audio/')) return '🎵'
-  if (mime === 'application/pdf' || name.endsWith('.pdf')) return '📕'
-  if (/\.(zip|rar|7z|tar|gz|bz2|xz)$/.test(name)) return '🗜️'
-  if (/\.(doc|docx|wps)$/.test(name)) return '📘'
-  if (/\.(xls|xlsx|csv|et)$/.test(name)) return '📗'
-  if (/\.(ppt|pptx|dps)$/.test(name)) return '📙'
-  if (/\.(md|txt|rtf|log)$/.test(name)) return '📝'
-  if (/\.(js|ts|jsx|tsx|go|py|java|c|cpp|h|rs|rb|php|sh|bash|zsh|sql|json|ya?ml|toml|xml|html|css|scss|vue|swift|kt)$/.test(name)) return '📜'
-  return '📄'
+  if (mime === 'application/pdf' || name.endsWith('.pdf')) return 'file-text'
+  if (/\.(zip|rar|7z|tar|gz|bz2|xz)$/.test(name)) return 'file-archive'
+  if (/\.(doc|docx|wps)$/.test(name)) return 'file-doc'
+  if (/\.(xls|xlsx|csv|et)$/.test(name)) return 'file-sheet'
+  if (/\.(ppt|pptx|dps)$/.test(name)) return 'file-slide'
+  if (/\.(md|txt|rtf|log)$/.test(name)) return 'file-text'
+  if (/\.(js|ts|jsx|tsx|go|py|java|c|cpp|h|rs|rb|php|sh|bash|zsh|sql|json|ya?ml|toml|xml|html|css|scss|vue|swift|kt)$/.test(name)) return 'file-code'
+  return 'file'
 })
 
 onMounted(checkCollapse)
@@ -48,11 +48,18 @@ watch(
   }
 )
 
-// 只在折叠态测量；展开态下元素不溢出，重测会把 collapsible 误置为 false
+// 只在折叠态测量；line-clamp 截断的浏览器里 scrollHeight 会被钳到可见高度，
+// 故临时解除 clamp 测全高再还原，桌面/移动行为一致
 function checkCollapse() {
   const el = textEl.value
   if (!el || expanded.value) return
-  collapsible.value = el.scrollHeight > el.clientHeight + 2
+  const visible = el.clientHeight
+  if (!visible) return
+  const prev = el.style.webkitLineClamp
+  el.style.webkitLineClamp = 'unset'
+  const full = el.scrollHeight
+  el.style.webkitLineClamp = prev
+  collapsible.value = full > visible + 2
 }
 
 function toggleExpand() {
@@ -93,9 +100,9 @@ function onDelete() {
 
 <template>
   <div class="msg" :data-msg-id="msg.id">
-    <!-- 文字消息 -->
-    <div v-if="msg.type === 'text'" class="bubble">
-      <div ref="textEl" class="msg-text" :class="{ expanded }" v-html="html"></div>
+    <!-- 文字消息（isCode 为 webhook 推送的代码消息，等宽渲染） -->
+    <div v-if="msg.type === 'text'" class="bubble" :class="{ 'bubble-code': isCode }">
+      <div ref="textEl" class="msg-text" :class="{ expanded, mono: isCode }" v-html="html"></div>
       <button v-if="collapsible" class="expand-btn" @click="toggleExpand">
         {{ expanded ? '收起' : '展开全文' }}
       </button>
@@ -124,7 +131,7 @@ function onDelete() {
 
     <!-- 文件消息 -->
     <a v-else class="bubble file-card" :href="api.downloadUrl(msg.fileId)" :download="msg.fileName">
-      <div class="file-icon">{{ fileIcon }}</div>
+      <div class="file-icon"><AppIcon :name="fileIcon" :size="21" /></div>
       <div class="file-meta">
         <div class="file-name">{{ msg.fileName }}</div>
         <div class="file-size">{{ formatSize(msg.fileSize) }}</div>

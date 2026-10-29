@@ -462,7 +462,7 @@ func (s *Server) handlePostMessage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "文字太长了"})
 		return
 	}
-	msg, err := s.store.InsertText(room.ID, content)
+	msg, err := s.store.InsertText(room.ID, content, false)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存失败"})
 		return
@@ -674,7 +674,10 @@ func (s *Server) handleWebhookMessage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "token 无效"})
 		return
 	}
-	var body struct{ Content string `json:"content"` }
+	var body struct {
+		Content string `json:"content"`
+		Type    string `json:"type"` // text（默认）| code：错误堆栈等宽渲染
+	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求格式错误"})
 		return
@@ -685,7 +688,7 @@ func (s *Server) handleWebhookMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 固定写入 BUG反馈 房间（ID=1）
-	msg, err := s.store.InsertText(1, content)
+	msg, err := s.store.InsertText(1, content, body.Type == "code")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "保存失败"})
 		return

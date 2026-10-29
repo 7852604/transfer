@@ -31,6 +31,9 @@
   --sp-6: 24px;
   --sp-8: 32px;
 
+  /* 等宽字体 */
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+
   /* 圆角 */
   --r-sm: 8px;
   --r-md: 12px;
@@ -300,6 +303,9 @@ textarea {
 }
 
 .sidebar-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   font-weight: 600;
   font-size: var(--fs-sm);
   letter-spacing: 0.5px;
@@ -363,8 +369,14 @@ textarea {
 }
 
 .room-lock {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  color: var(--ink-4);
   flex-shrink: 0;
+}
+
+.sidebar-room.active .room-lock {
+  color: var(--accent);
 }
 
 .room-lock.muted {
@@ -402,6 +414,14 @@ textarea {
   border-radius: var(--r-sm);
   color: var(--ink-2);
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.tool-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  flex-shrink: 0;
 }
 
 .sidebar-tool:hover {
@@ -496,7 +516,9 @@ textarea {
 }
 
 .lock-icon {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  color: var(--ink-3);
 }
 
 .stats-chip {
@@ -505,12 +527,6 @@ textarea {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   margin-left: var(--sp-1);
-}
-
-.stats-chip::before {
-  content: '·';
-  margin-right: var(--sp-1);
-  color: var(--ink-4);
 }
 
 .icon-btn {
@@ -686,13 +702,30 @@ textarea {
 
 /* 长文字折叠 */
 .msg-text {
-  max-height: 12.8em;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+  line-clamp: 8;
   overflow: hidden;
   white-space: pre-wrap;
 }
 
 .msg-text.expanded {
-  max-height: none;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  display: -webkit-box;
+}
+
+/* webhook 推送的代码消息：等宽 + 淡底块 */
+.msg-text.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.bubble-code {
+  background: var(--paper-2);
+  border: 1px solid var(--line-2);
 }
 
 .expand-btn {
@@ -760,10 +793,10 @@ textarea {
   height: 40px;
   border-radius: var(--r-sm);
   background: var(--accent-soft);
+  color: var(--accent);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 19px;
   flex-shrink: 0;
 }
 
@@ -896,10 +929,10 @@ textarea {
   border-radius: var(--r-xl);
   background: var(--card);
   border: 1px solid var(--line);
+  color: var(--ink-4);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 32px;
 }
 
 .empty-title {
@@ -997,7 +1030,9 @@ textarea {
 }
 
 .send-btn:disabled {
-  opacity: 0.35;
+  opacity: 1;
+  background: var(--line-2);
+  color: var(--ink-4);
   cursor: default;
 }
 
@@ -1269,8 +1304,10 @@ textarea {
 }
 
 .pinned-icon {
+  display: flex;
+  align-items: center;
+  color: var(--accent);
   flex-shrink: 0;
-  font-size: 13px;
 }
 
 .pinned-text {

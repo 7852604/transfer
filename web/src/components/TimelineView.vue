@@ -4,6 +4,7 @@ import { api } from '../api'
 import { formatDay, formatSize } from '../utils'
 import MessageItem from './MessageItem.vue'
 import ImageViewer from './ImageViewer.vue'
+import AppIcon from './AppIcon.vue'
 
 const messages = ref([])
 const hasMore = ref(false)
@@ -201,7 +202,7 @@ function cycleTheme() {
   showToast(theme.value === 'auto' ? '跟随系统' : theme.value === 'dark' ? '暗色模式' : '亮色模式')
 }
 
-const themeIcon = computed(() => (theme.value === 'auto' ? '🌗' : theme.value === 'dark' ? '🌙' : '☀️'))
+const themeIcon = computed(() => (theme.value === 'auto' ? 'contrast' : theme.value === 'dark' ? 'moon' : 'sun'))
 const themeLabel = computed(() => (theme.value === 'auto' ? '主题：跟随系统' : theme.value === 'dark' ? '主题：暗色' : '主题：亮色'))
 
 const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'
@@ -525,15 +526,14 @@ function showToast(msg) {
     <!-- 侧边栏 -->
     <aside class="sidebar" :class="{ open: showSidebar }">
       <div class="sidebar-head">
-        <span class="sidebar-title">📨 速传</span>
+        <span class="sidebar-title"><AppIcon name="mail" :size="17" /> 速传</span>
         <button class="sidebar-new-btn" title="新建房间" @click="showRoomDialog = true; showSidebar = false">＋</button>
       </div>
 
       <nav class="sidebar-rooms">
         <div class="sidebar-section">房间</div>
         <button v-for="r in rooms" :key="r.id" class="sidebar-room" :class="{ active: r.id === currentRoom?.id }" @click="switchRoom(r)">
-          <span v-if="r.hasPassword" class="room-lock">🔒</span>
-          <span v-else class="room-lock muted">🔓</span>
+          <span class="room-lock"><AppIcon :name="r.hasPassword ? 'lock' : 'unlock'" :size="13" /></span>
           <span class="room-name">{{ r.name }}</span>
           <span v-if="r.id === currentRoom?.id" class="room-check">✓</span>
         </button>
@@ -542,14 +542,14 @@ function showToast(msg) {
       <div class="sidebar-tools">
         <div class="sidebar-section">工具</div>
         <button class="sidebar-tool" @click="showPasswordDialog = true; showSidebar = false">
-          <span>🔐</span><span>{{ currentRoom?.hasPassword ? '修改 / 取消密码' : '设置密码' }}</span>
+          <span class="tool-ico"><AppIcon name="key" :size="15" /></span><span>{{ currentRoom?.hasPassword ? '修改 / 取消密码' : '设置密码' }}</span>
         </button>
-        <button class="sidebar-tool" @click="openTrash"><span>🗑</span><span>回收站</span></button>
-        <button class="sidebar-tool" @click="backupNow"><span>💾</span><span>立即备份</span></button>
-        <button class="sidebar-tool" @click="showCleanup = true; showSidebar = false"><span>🧹</span><span>清理旧消息</span></button>
-        <button class="sidebar-tool" @click="showClear = true; showSidebar = false"><span>⚠</span><span>清空本房间</span></button>
-        <button v-if="currentRoom?.id !== 1" class="sidebar-tool danger" @click="showDeleteRoom = true; showSidebar = false"><span>🗑</span><span>删除本房间…</span></button>
-        <button class="sidebar-tool" @click="cycleTheme"><span>{{ themeIcon }}</span><span>{{ themeLabel }}</span></button>
+        <button class="sidebar-tool" @click="openTrash"><span class="tool-ico"><AppIcon name="trash" :size="15" /></span><span>回收站</span></button>
+        <button class="sidebar-tool" @click="backupNow"><span class="tool-ico"><AppIcon name="save" :size="15" /></span><span>立即备份</span></button>
+        <button class="sidebar-tool" @click="showCleanup = true; showSidebar = false"><span class="tool-ico"><AppIcon name="eraser" :size="15" /></span><span>清理旧消息</span></button>
+        <button class="sidebar-tool danger" @click="showClear = true; showSidebar = false"><span class="tool-ico"><AppIcon name="alert" :size="15" /></span><span>清空本房间</span></button>
+        <button v-if="currentRoom?.id !== 1" class="sidebar-tool danger" @click="showDeleteRoom = true; showSidebar = false"><span class="tool-ico"><AppIcon name="trash" :size="15" /></span><span>删除本房间…</span></button>
+        <button class="sidebar-tool" @click="cycleTheme"><span class="tool-ico"><AppIcon :name="themeIcon" :size="15" /></span><span>{{ themeLabel }}</span></button>
         <button class="sidebar-version" @click="showVersion">v{{ appVersion }}</button>
       </div>
     </aside>
@@ -558,10 +558,10 @@ function showToast(msg) {
     <div class="main">
       <header class="topbar">
         <div class="topbar-row">
-          <button class="menu-toggle" title="房间列表" @click="showSidebar = true">☰</button>
+          <button class="menu-toggle" title="房间列表" @click="showSidebar = true"><AppIcon name="menu" :size="19" /></button>
           <div class="room-title">
             <span>{{ currentRoom?.name || '速传' }}</span>
-            <span v-if="currentRoom?.hasPassword" class="lock-icon">🔒</span>
+            <span v-if="currentRoom?.hasPassword" class="lock-icon"><AppIcon name="lock" :size="13" /></span>
           </div>
           <span v-if="stats" class="stats-chip">{{ stats.count }} 条 · {{ formatSize(stats.fileBytes || 0) }}</span>
         </div>
@@ -574,7 +574,7 @@ function showToast(msg) {
 
       <!-- 置顶条：固定在列表上方，滚动到哪都能看到 -->
       <div v-if="!showTrash && pinnedMsg" class="pinned-bar" @click="jumpToPinned">
-        <span class="pinned-icon">📌</span>
+        <span class="pinned-icon"><AppIcon name="pin" :size="14" /></span>
         <span class="pinned-text">{{ pinnedMsg.type === 'file' ? pinnedMsg.fileName : pinnedMsg.content }}</span>
         <span class="pinned-jump">定位</span>
         <button class="pinned-unpin" title="取消置顶" @click.stop="togglePin(pinnedMsg)">✕</button>
@@ -598,7 +598,7 @@ function showToast(msg) {
         </div>
         <div v-if="isSearching && !searchResults.length" class="empty">没有匹配「{{ searchQuery.trim() }}」的消息</div>
         <div v-if="!isSearching && !messages.length && !uploads.length" class="empty">
-          <div class="empty-icon">📨</div>
+          <div class="empty-icon"><AppIcon name="mail" :size="42" /></div>
           <div class="empty-title">{{ currentRoom?.name || '速传' }}</div>
           <div class="empty-hint">输入文字按 Enter 发送<br />粘贴 / 拖入文件可直接上传</div>
         </div>
@@ -611,7 +611,7 @@ function showToast(msg) {
           <span class="trash-title">回收站</span>
           <button v-if="trashItems.length" class="meta-btn danger" @click="emptyTrash">清空</button>
         </div>
-        <div v-if="!trashItems.length" class="empty"><div class="empty-icon">🗑</div><div class="empty-title">回收站是空的</div></div>
+        <div v-if="!trashItems.length" class="empty"><div class="empty-icon"><AppIcon name="trash" :size="42" /></div><div class="empty-title">回收站是空的</div></div>
         <div v-for="m in trashItems" :key="m.id" class="trash-item">
           <div class="trash-content">
             <span v-if="m.type === 'file'" class="file-tag">{{ m.fileName }}</span>
